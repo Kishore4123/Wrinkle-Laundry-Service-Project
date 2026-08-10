@@ -1,5 +1,5 @@
-// BillGenerationScreen — Search student, enter laundry details, generate bill
-import React, { useState } from 'react';
+// BillGenerationScreen — Search customer, build multi-service cart, generate bill
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -8,24 +8,40 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { Searchbar, TextInput, Button, Text, RadioButton, Snackbar } from 'react-native-paper';
+import { Searchbar, TextInput, Button, Text, RadioButton, Snackbar, SegmentedButtons } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { StudentService, BillService } from '../services/storage';
+import { CustomerService, BillService } from '../services/storage';
+import { SettingsService } from '../services/settingsStorage';
 import BillConfirmationModal from '../components/BillConfirmationModal';
-import { appColors, SERVICE_TYPES, RATES } from '../theme/theme';
+import ClothingItemPicker from '../components/ClothingItemPicker';
+import PiecewiseItemPicker from '../components/PiecewiseItemPicker';
+import CartItemCard from '../components/CartItemCard';
+import { appColors, SERVICE_TYPES, DEFAULT_CATEGORIES_PRICING } from '../theme/theme';
 import { formatCurrency } from '../utils/helpers';
 
+// Remove IRON_DRY from options here if it exists in SERVICE_TYPES
+const SERVICE_KEYS = Object.keys(SERVICE_TYPES).filter(k => k !== 'IRON_DRY');
+
 export default function BillGenerationScreen() {
-  // Student search
+  // Customer search
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showResults, setShowResults] = useState(false);
 
-  // Bill inputs
-  const [weight, setWeight] = useState('');
-  const [clothesCount, setClothesCount] = useState('');
+  // Settings
+  const [categoriesConfig, setCategoriesConfig] = useState({});
+
+  // Current cart item inputs
   const [serviceType, setServiceType] = useState('WASH_ONLY');
+  const [billingMode, setBillingMode] = useState('kg'); // 'kg' or 'piece'
+  const [weight, setWeight] = useState('');
+  const [clothingItems, setClothingItems] = useState([]); // used for kg mode
+  const [piecewiseItems, setPiecewiseItems] = useState([]); // used for piece mode
+  const [showItemPicker, setShowItemPicker] = useState(false);
+
+  // Cart
+  const [cart, setCart] = useState([]);
 
   // UI state
   const [loading, setLoading] = useState(false);
@@ -33,16 +49,61 @@ export default function BillGenerationScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [generatedBill, setGeneratedBill] = useState(null);
 
-  // Computed
-  const rate = RATES[serviceType];
+  // Load config on mount
+  useEffect(() => {
+    loadConfig();
+  }, []);
+
+  const loadConfig = async () => {
+    const config = await SettingsService.getCategories();
+    setCategoriesConfig(config);
+  };
+
+  // When service type changes, force billing mode if necessary
+  useEffect(() => {
+    if (serviceType === 'WASH_ONLY') {
+      setBillingMode('kg');
+    } else if (serviceType === 'IRON_STEAM') {
+      setBillingMode('piece');
+    }
+    // For WASH_AND_IRON, it can be either, so we don't force change it
+  }, [serviceType]);
+
+  const customerCategory = selectedCustomer?.category || 'Student';
+  const categoryPricing = categoriesConfig[customerCategory] || DEFAULT_CATEGORIES_PRICING.Student;
+
+  const currentKgRate = categoryPricing?.kgRates?.[serviceType] || SERVICE_TYPES[serviceType]?.defaultRate || 0;
+  const currentPieceRates = categoryPricing?.pieceRates?.[serviceType] || {};
+
+  // Computed for current input
   const weightNum = parseFloat(weight) || 0;
-  const totalAmount = Math.round(weightNum * rate * 100) / 100;
+  
+  let currentSubtotal = 0;
+  if (billingMode === 'kg') {
+    currentSubtotal = Math.round(weightNum * currentKgRate * 100) / 100;
+  } else {
+    currentSubtotal = piecewiseItems.reduce((sum, item) => sum + (item.count * item.rate), 0);
+  }
+
+  const totalItemsCount = billingMode === 'kg' 
+    ? clothingItems.reduce((sum, i) => sum + i.count, 0)
+    : piecewiseItems.reduce((sum, i) => sum + i.count, 0);
+
+  // Cart totals
+  const cartTotalAmount = cart.reduce((sum, item) => sum + item.subtotal, 0);
+  const cartTotalWeight = cart.reduce((sum, item) => sum + (item.weight || 0), 0);
+  const cartTotalItems = cart.reduce(
+    (sum, item) => sum + (item.items || []).reduce((s, i) => s + i.count, 0),
+    0
+  );
+
+  const grandTotal = cartTotalAmount;
 
   // Handlers
   const handleSearch = async (query) => {
     setSearchQuery(query);
     if (query.trim().length > 0) {
-      const results = await StudentService.search(query);
+      const results = await CustomerService.search(query);
       setSearchResults(results);
       setShowResults(true);
     } else {
@@ -51,45 +112,78 @@ export default function BillGenerationScreen() {
     }
   };
 
-  const selectStudent = (student) => {
-    setSelectedStudent(student);
+  const selectCustomer = (customer) => {
+    setSelectedCustomer(customer);
     setSearchQuery('');
     setSearchResults([]);
     setShowResults(false);
   };
 
-  const clearStudent = () => {
-    setSelectedStudent(null);
+  const clearCustomer = () => {
+    setSelectedCustomer(null);
     setSearchQuery('');
   };
 
-  const handleGenerateBill = async () => {
-    // Validate
-    if (!selectedStudent) {
-      setSnackbar({ visible: true, message: 'Please select a student first.' });
-      return;
-    }
-    if (!weight || weightNum <= 0) {
+  const handleAddToCart = () => {
+    if (billingMode === 'kg' && (!weight || weightNum <= 0)) {
       setSnackbar({ visible: true, message: 'Please enter a valid weight.' });
       return;
     }
-    if (!clothesCount || parseInt(clothesCount, 10) <= 0) {
-      setSnackbar({ visible: true, message: 'Please enter the number of clothes.' });
+    if (billingMode === 'piece' && piecewiseItems.length === 0) {
+      setSnackbar({ visible: true, message: 'Please select at least one piece.' });
+      return;
+    }
+
+    const cartItem = {
+      serviceType,
+      isPiecewise: billingMode === 'piece',
+      weight: billingMode === 'kg' ? weightNum : 0,
+      items: billingMode === 'kg' ? [...clothingItems] : [...piecewiseItems],
+      ratePerKg: billingMode === 'kg' ? currentKgRate : 0,
+      subtotal: currentSubtotal,
+    };
+
+    setCart([...cart, cartItem]);
+    // Reset current inputs
+    setWeight('');
+    setClothingItems([]);
+    setPiecewiseItems([]);
+    setShowItemPicker(false);
+    setServiceType('WASH_ONLY');
+  };
+
+  const handleRemoveFromCart = (index) => {
+    setCart(cart.filter((_, i) => i !== index));
+  };
+
+  const handleGenerateBill = async () => {
+    if (!selectedCustomer) {
+      setSnackbar({ visible: true, message: 'Please select a customer first.' });
+      return;
+    }
+    if (cart.length === 0) {
+      setSnackbar({ visible: true, message: 'Please add at least one service to the cart.' });
       return;
     }
 
     setLoading(true);
     try {
+      const totalWeight = cart.reduce((sum, item) => sum + (item.weight || 0), 0);
+      const totalClothesCount = cart.reduce(
+        (sum, item) => sum + (item.items || []).reduce((s, i) => s + i.count, 0),
+        0
+      );
+      const totalAmount = cart.reduce((sum, item) => sum + item.subtotal, 0);
+
       const bill = await BillService.save({
-        studentId: selectedStudent.id,
-        studentName: selectedStudent.name,
-        regNo: selectedStudent.regNo,
-        mobile: selectedStudent.mobile,
-        weight: weightNum,
-        clothesCount: parseInt(clothesCount, 10),
-        serviceType,
-        ratePerKg: rate,
-        totalAmount,
+        customerId: selectedCustomer.id,
+        customerName: selectedCustomer.name,
+        customerCategory: selectedCustomer.category || 'Student',
+        mobile: selectedCustomer.mobile,
+        cartItems: cart,
+        totalWeight,
+        totalClothesCount,
+        totalAmount: Math.round(totalAmount * 100) / 100,
       });
       setGeneratedBill(bill);
       setModalVisible(true);
@@ -103,12 +197,15 @@ export default function BillGenerationScreen() {
   const handleModalDismiss = () => {
     setModalVisible(false);
     setGeneratedBill(null);
-    // Reset form
-    setSelectedStudent(null);
+    // Reset everything
+    setSelectedCustomer(null);
     setWeight('');
-    setClothesCount('');
+    setClothingItems([]);
+    setPiecewiseItems([]);
     setServiceType('WASH_ONLY');
+    setCart([]);
     setSearchQuery('');
+    setShowItemPicker(false);
   };
 
   return (
@@ -124,20 +221,20 @@ export default function BillGenerationScreen() {
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>New Bill</Text>
-          <Text style={styles.headerSubtitle}>Generate a laundry bill for a student</Text>
+          <Text style={styles.headerSubtitle}>Generate a laundry bill for a customer</Text>
         </View>
 
-        {/* Student Search Section */}
+        {/* Customer Search Section */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>
             <MaterialCommunityIcons name="account-search" size={16} color={appColors.primary} />
-            {'  '}Find Student
+            {'  '}Find Customer
           </Text>
 
-          {!selectedStudent ? (
+          {!selectedCustomer ? (
             <View>
               <Searchbar
-                placeholder="Search by name, reg no, or mobile..."
+                placeholder="Search by name or mobile..."
                 onChangeText={handleSearch}
                 value={searchQuery}
                 style={styles.searchbar}
@@ -148,89 +245,58 @@ export default function BillGenerationScreen() {
               {/* Search Results Dropdown */}
               {showResults && searchResults.length > 0 && (
                 <View style={styles.resultsContainer}>
-                  {searchResults.slice(0, 5).map((student) => (
-                    <TouchableOpacity
-                      key={student.id}
-                      style={styles.resultItem}
-                      onPress={() => selectStudent(student)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.resultAvatar}>
-                        <Text style={styles.resultAvatarText}>
-                          {student.name.charAt(0).toUpperCase()}
-                        </Text>
-                      </View>
-                      <View style={styles.resultInfo}>
-                        <Text style={styles.resultName}>{student.name}</Text>
-                        <Text style={styles.resultDetail}>
-                          {student.regNo} • {student.mobile}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
+                  {searchResults.slice(0, 5).map((customer) => {
+                    const isStudent = (customer.category || 'Student').toLowerCase() === 'student';
+                    return (
+                      <TouchableOpacity
+                        key={customer.id}
+                        style={styles.resultItem}
+                        onPress={() => selectCustomer(customer)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[styles.resultAvatar, isStudent ? { backgroundColor: '#EEF2FF' } : { backgroundColor: '#CCFBF1' }]}>
+                          <Text style={[styles.resultAvatarText, { color: isStudent ? appColors.primary : appColors.secondary }]}>
+                            {customer.name.charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                        <View style={styles.resultInfo}>
+                          <Text style={styles.resultName}>{customer.name}</Text>
+                          <Text style={styles.resultDetail}>
+                            {customer.mobile} • {customer.category || 'Student'}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               )}
 
               {showResults && searchResults.length === 0 && searchQuery.length > 0 && (
                 <View style={styles.noResults}>
                   <MaterialCommunityIcons name="account-question" size={24} color={appColors.textLight} />
-                  <Text style={styles.noResultsText}>No students found</Text>
+                  <Text style={styles.noResultsText}>No customers found</Text>
                 </View>
               )}
             </View>
           ) : (
-            /* Selected Student Card */
+            /* Selected Customer Card */
             <View style={styles.selectedCard}>
               <View style={styles.selectedAvatar}>
                 <Text style={styles.selectedAvatarText}>
-                  {selectedStudent.name.charAt(0).toUpperCase()}
+                  {selectedCustomer.name.charAt(0).toUpperCase()}
                 </Text>
               </View>
               <View style={styles.selectedInfo}>
-                <Text style={styles.selectedName}>{selectedStudent.name}</Text>
+                <Text style={styles.selectedName}>{selectedCustomer.name}</Text>
                 <Text style={styles.selectedDetail}>
-                  {selectedStudent.regNo} • {selectedStudent.mobile}
+                  {selectedCustomer.mobile} • {selectedCustomer.category || 'Student'}
                 </Text>
               </View>
-              <TouchableOpacity onPress={clearStudent} style={styles.clearBtn}>
+              <TouchableOpacity onPress={clearCustomer} style={styles.clearBtn}>
                 <MaterialCommunityIcons name="close-circle" size={24} color={appColors.textLight} />
               </TouchableOpacity>
             </View>
           )}
-        </View>
-
-        {/* Bill Details Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>
-            <MaterialCommunityIcons name="clipboard-text-outline" size={16} color={appColors.primary} />
-            {'  '}Laundry Details
-          </Text>
-
-          {/* Weight */}
-          <TextInput
-            label="Weight (kg)"
-            value={weight}
-            onChangeText={(t) => setWeight(t.replace(/[^0-9.]/g, ''))}
-            mode="outlined"
-            style={styles.input}
-            outlineStyle={styles.inputOutline}
-            left={<TextInput.Icon icon="weight-kilogram" />}
-            keyboardType="decimal-pad"
-            placeholder="e.g. 2.5"
-          />
-
-          {/* Clothes Count */}
-          <TextInput
-            label="Number of Clothes"
-            value={clothesCount}
-            onChangeText={(t) => setClothesCount(t.replace(/[^0-9]/g, ''))}
-            mode="outlined"
-            style={styles.input}
-            outlineStyle={styles.inputOutline}
-            left={<TextInput.Icon icon="tshirt-crew-outline" />}
-            keyboardType="number-pad"
-            placeholder="e.g. 12"
-          />
         </View>
 
         {/* Service Type Selection */}
@@ -244,83 +310,181 @@ export default function BillGenerationScreen() {
             onValueChange={(value) => setServiceType(value)}
             value={serviceType}
           >
-            <TouchableOpacity
-              style={[
-                styles.serviceOption,
-                serviceType === 'WASH_ONLY' && styles.serviceOptionSelected,
-              ]}
-              onPress={() => setServiceType('WASH_ONLY')}
-              activeOpacity={0.7}
-            >
-              <View style={styles.serviceOptionLeft}>
-                <RadioButton.Android
-                  value="WASH_ONLY"
-                  color={appColors.primary}
-                />
-                <View>
-                  <Text style={[
-                    styles.serviceLabel,
-                    serviceType === 'WASH_ONLY' && styles.serviceLabelSelected,
-                  ]}>
-                    {SERVICE_TYPES.WASH_ONLY.label}
-                  </Text>
-                  <Text style={styles.serviceRate}>₹{RATES.WASH_ONLY} per kg</Text>
-                </View>
-              </View>
-              <MaterialCommunityIcons
-                name="washing-machine"
-                size={28}
-                color={serviceType === 'WASH_ONLY' ? appColors.primary : appColors.textLight}
-              />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.serviceOption,
-                serviceType === 'WASH_AND_IRON' && styles.serviceOptionSelected,
-              ]}
-              onPress={() => setServiceType('WASH_AND_IRON')}
-              activeOpacity={0.7}
-            >
-              <View style={styles.serviceOptionLeft}>
-                <RadioButton.Android
-                  value="WASH_AND_IRON"
-                  color={appColors.secondary}
-                />
-                <View>
-                  <Text style={[
-                    styles.serviceLabel,
-                    serviceType === 'WASH_AND_IRON' && styles.serviceLabelSelected,
-                  ]}>
-                    {SERVICE_TYPES.WASH_AND_IRON.label}
-                  </Text>
-                  <Text style={styles.serviceRate}>₹{RATES.WASH_AND_IRON} per kg</Text>
-                </View>
-              </View>
-              <MaterialCommunityIcons
-                name="iron"
-                size={28}
-                color={serviceType === 'WASH_AND_IRON' ? appColors.secondary : appColors.textLight}
-              />
-            </TouchableOpacity>
+            {SERVICE_KEYS.map((key) => {
+              const svc = SERVICE_TYPES[key];
+              if (!svc) return null; // safety
+              const rate = categoryPricing?.kgRates?.[key] || svc.defaultRate;
+              const isSelected = serviceType === key;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={[
+                    styles.serviceOption,
+                    isSelected && { borderColor: svc.color, backgroundColor: svc.bgColor },
+                  ]}
+                  onPress={() => setServiceType(key)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.serviceOptionLeft}>
+                    <RadioButton.Android value={key} color={svc.color} />
+                    <View>
+                      <Text style={[
+                        styles.serviceLabel,
+                        isSelected && { color: svc.color },
+                      ]}>
+                        {svc.label}
+                      </Text>
+                      {key !== 'IRON_STEAM' && (
+                        <Text style={styles.serviceRate}>₹{rate} per kg</Text>
+                      )}
+                    </View>
+                  </View>
+                  <MaterialCommunityIcons
+                    name={svc.icon}
+                    size={28}
+                    color={isSelected ? svc.color : appColors.textLight}
+                  />
+                </TouchableOpacity>
+              );
+            })}
           </RadioButton.Group>
         </View>
 
-        {/* Price Summary */}
-        {weightNum > 0 && (
-          <View style={styles.priceSummary}>
-            <View style={styles.priceRow}>
-              <Text style={styles.priceLabel}>Weight</Text>
-              <Text style={styles.priceValue}>{weightNum} kg</Text>
+        {/* Laundry Details */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>
+            <MaterialCommunityIcons name="clipboard-text-outline" size={16} color={appColors.primary} />
+            {'  '}Laundry Details
+          </Text>
+
+          {serviceType === 'WASH_AND_IRON' && (
+            <SegmentedButtons
+              value={billingMode}
+              onValueChange={setBillingMode}
+              buttons={[
+                { value: 'kg', label: 'By Kg', icon: 'weight-kilogram' },
+                { value: 'piece', label: 'By Piece', icon: 'hanger' },
+              ]}
+              style={{ marginBottom: 16 }}
+            />
+          )}
+
+          {billingMode === 'kg' ? (
+            <View>
+              {/* Weight */}
+              <TextInput
+                label="Weight (kg)"
+                value={weight}
+                onChangeText={(t) => setWeight(t.replace(/[^0-9.]/g, ''))}
+                mode="outlined"
+                style={styles.input}
+                outlineStyle={styles.inputOutline}
+                left={<TextInput.Icon icon="weight-kilogram" />}
+                keyboardType="decimal-pad"
+                placeholder="e.g. 2.5"
+              />
+
+              {/* Clothing Items Picker Toggle */}
+              <TouchableOpacity
+                style={styles.itemPickerToggle}
+                onPress={() => setShowItemPicker(!showItemPicker)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.itemPickerToggleLeft}>
+                  <MaterialCommunityIcons name="tshirt-crew-outline" size={20} color={appColors.primary} />
+                  <View>
+                    <Text style={styles.itemPickerToggleTitle}>Itemize Clothing</Text>
+                    <Text style={styles.itemPickerToggleSubtitle}>
+                      {totalItemsCount > 0
+                        ? `${totalItemsCount} item${totalItemsCount !== 1 ? 's' : ''} selected`
+                        : 'Optional: specify clothing categories'}
+                    </Text>
+                  </View>
+                </View>
+                <MaterialCommunityIcons
+                  name={showItemPicker ? 'chevron-up' : 'chevron-down'}
+                  size={24}
+                  color={appColors.textLight}
+                />
+              </TouchableOpacity>
+
+              {showItemPicker && (
+                <View style={styles.itemPickerContainer}>
+                  <ClothingItemPicker
+                    items={clothingItems}
+                    onItemsChange={setClothingItems}
+                  />
+                </View>
+              )}
             </View>
-            <View style={styles.priceRow}>
-              <Text style={styles.priceLabel}>Rate</Text>
-              <Text style={styles.priceValue}>₹{rate}/kg</Text>
+          ) : (
+            <PiecewiseItemPicker
+              items={piecewiseItems}
+              onItemsChange={setPiecewiseItems}
+              pieceRates={currentPieceRates}
+            />
+          )}
+        </View>
+
+        {/* Current Item Preview */}
+        {((billingMode === 'kg' && weightNum > 0) || (billingMode === 'piece' && piecewiseItems.length > 0)) && (
+          <View style={styles.currentPreview}>
+            <View style={styles.previewRow}>
+              <Text style={styles.previewLabel}>
+                {SERVICE_TYPES[serviceType]?.label} • {billingMode === 'kg' ? `${weightNum} kg × ₹${currentKgRate}` : `${totalItemsCount} pieces`}
+              </Text>
+              <Text style={styles.previewValue}>{formatCurrency(currentSubtotal)}</Text>
             </View>
-            <View style={styles.priceDivider} />
-            <View style={styles.priceRow}>
-              <Text style={styles.totalLabel}>Total Amount</Text>
-              <Text style={styles.totalValue}>{formatCurrency(totalAmount)}</Text>
+            <Button
+              mode="contained"
+              onPress={handleAddToCart}
+              style={styles.addToCartBtn}
+              contentStyle={styles.addToCartContent}
+              labelStyle={styles.addToCartLabel}
+              icon="cart-plus"
+              buttonColor={appColors.secondary}
+            >
+              Add to Cart
+            </Button>
+          </View>
+        )}
+
+        {/* Cart Summary */}
+        {cart.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>
+              <MaterialCommunityIcons name="cart-outline" size={16} color={appColors.primary} />
+              {'  '}Cart ({cart.length} service{cart.length !== 1 ? 's' : ''})
+            </Text>
+
+            {cart.map((cartItem, index) => (
+              <CartItemCard
+                key={index}
+                cartItem={cartItem}
+                index={index}
+                onDelete={handleRemoveFromCart}
+              />
+            ))}
+
+            {/* Grand Total */}
+            <View style={styles.priceSummary}>
+              {cartTotalWeight > 0 && (
+                <View style={styles.priceRow}>
+                  <Text style={styles.priceLabel}>Total Weight</Text>
+                  <Text style={styles.priceValue}>{cartTotalWeight} kg</Text>
+                </View>
+              )}
+              {cartTotalItems > 0 && (
+                <View style={styles.priceRow}>
+                  <Text style={styles.priceLabel}>Total Items</Text>
+                  <Text style={styles.priceValue}>{cartTotalItems}</Text>
+                </View>
+              )}
+              <View style={styles.priceDivider} />
+              <View style={styles.priceRow}>
+                <Text style={styles.totalLabel}>Grand Total</Text>
+                <Text style={styles.totalValue}>{formatCurrency(grandTotal)}</Text>
+              </View>
             </View>
           </View>
         )}
@@ -331,7 +495,7 @@ export default function BillGenerationScreen() {
             mode="contained"
             onPress={handleGenerateBill}
             loading={loading}
-            disabled={loading || !selectedStudent || weightNum <= 0}
+            disabled={loading || !selectedCustomer || cart.length === 0}
             style={styles.generateBtn}
             contentStyle={styles.generateContent}
             labelStyle={styles.generateLabel}
@@ -428,7 +592,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#EEF2FF',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -436,7 +599,6 @@ const styles = StyleSheet.create({
   resultAvatarText: {
     fontSize: 15,
     fontWeight: '700',
-    color: appColors.primary,
   },
   resultInfo: {
     flex: 1,
@@ -499,13 +661,6 @@ const styles = StyleSheet.create({
   clearBtn: {
     padding: 4,
   },
-  input: {
-    marginBottom: 12,
-    backgroundColor: appColors.surface,
-  },
-  inputOutline: {
-    borderRadius: 14,
-  },
   serviceOption: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -518,10 +673,6 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: appColors.border,
   },
-  serviceOptionSelected: {
-    borderColor: appColors.primaryLight,
-    backgroundColor: '#F5F3FF',
-  },
   serviceOptionLeft: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -531,20 +682,94 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: appColors.text,
   },
-  serviceLabelSelected: {
-    color: appColors.primaryDark,
-  },
   serviceRate: {
     fontSize: 12,
     color: appColors.textSecondary,
     marginTop: 2,
   },
-  priceSummary: {
+  input: {
+    marginBottom: 12,
+    backgroundColor: appColors.surface,
+  },
+  inputOutline: {
+    borderRadius: 14,
+  },
+  itemPickerToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: appColors.surface,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: appColors.border,
+  },
+  itemPickerToggleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  itemPickerToggleTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: appColors.text,
+  },
+  itemPickerToggleSubtitle: {
+    fontSize: 12,
+    color: appColors.textSecondary,
+    marginTop: 2,
+  },
+  itemPickerContainer: {
+    marginTop: 12,
+    backgroundColor: appColors.surface,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: appColors.border,
+  },
+  currentPreview: {
     marginHorizontal: 20,
-    marginTop: 24,
+    marginTop: 16,
+    backgroundColor: appColors.surface,
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: appColors.secondaryLight,
+    borderStyle: 'dashed',
+  },
+  previewRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  previewLabel: {
+    fontSize: 13,
+    color: appColors.textSecondary,
+    fontWeight: '500',
+    flex: 1,
+  },
+  previewValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: appColors.secondary,
+  },
+  addToCartBtn: {
+    borderRadius: 12,
+  },
+  addToCartContent: {
+    height: 44,
+  },
+  addToCartLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  priceSummary: {
     backgroundColor: appColors.surface,
     borderRadius: 16,
     padding: 20,
+    marginTop: 12,
     elevation: 2,
     shadowColor: appColors.shadow,
     shadowOffset: { width: 0, height: 2 },

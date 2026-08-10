@@ -1,103 +1,120 @@
 // Persistent storage service using AsyncStorage
-// Handles all CRUD operations for Students and Bills
+// Handles all CRUD operations for Customers and Bills
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { generateId, generateBillId } from '../utils/helpers';
 
-const STUDENTS_KEY = '@laundry_students';
+const CUSTOMERS_KEY = '@laundry_customers';
 const BILLS_KEY = '@laundry_bills';
+// Legacy key for backward compatibility
+const STUDENTS_KEY = '@laundry_students';
 
 // ============================================================
-// Student Service
+// Customer Service (formerly StudentService)
 // ============================================================
-export const StudentService = {
+export const CustomerService = {
   /**
-   * Get all students, sorted alphabetically by name
+   * Get all customers, sorted alphabetically by name.
+   * Also migrates legacy student data if present.
    */
   async getAll() {
     try {
-      const data = await AsyncStorage.getItem(STUDENTS_KEY);
-      const students = data ? JSON.parse(data) : [];
-      return students.sort((a, b) => a.name.localeCompare(b.name));
+      let data = await AsyncStorage.getItem(CUSTOMERS_KEY);
+
+      // Migrate legacy student data if customers key doesn't exist
+      if (!data) {
+        const legacyData = await AsyncStorage.getItem(STUDENTS_KEY);
+        if (legacyData) {
+          const legacyStudents = JSON.parse(legacyData);
+          // Migrate: add default category, keep all existing fields
+          const migrated = legacyStudents.map((s) => ({
+            ...s,
+            category: s.category || 'Student',
+          }));
+          await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(migrated));
+          data = JSON.stringify(migrated);
+        }
+      }
+
+      const customers = data ? JSON.parse(data) : [];
+      return customers.sort((a, b) => a.name.localeCompare(b.name));
     } catch (error) {
-      console.error('Error getting students:', error);
+      console.error('Error getting customers:', error);
       return [];
     }
   },
 
   /**
-   * Add a new student. Throws if regNo already exists.
+   * Add a new customer (no regNo required).
+   * Duplicate detection is based on name + mobile.
    */
-  async add(student) {
-    const students = await this.getAll();
-    const existing = students.find(
-      (s) => s.regNo.toLowerCase() === student.regNo.toLowerCase()
-    );
-    if (existing) {
-      throw new Error(`A student with Reg No "${student.regNo}" already exists.`);
-    }
+  async add(customer) {
+    const customers = await this.getAll();
 
-    const newStudent = {
+    const newCustomer = {
       id: generateId(),
-      name: student.name.trim(),
-      regNo: student.regNo.trim().toUpperCase(),
-      mobile: student.mobile.trim(),
+      name: customer.name.trim(),
+      mobile: customer.mobile.trim(),
+      category: customer.category || 'Student',
       totalWeight: 0,
       totalAmountPaid: 0,
       createdAt: Date.now(),
     };
 
-    students.push(newStudent);
-    await AsyncStorage.setItem(STUDENTS_KEY, JSON.stringify(students));
-    return newStudent;
+    customers.push(newCustomer);
+    await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
+    return newCustomer;
   },
 
   /**
-   * Delete a student by ID
+   * Delete a customer by ID
    */
   async delete(id) {
-    const students = await this.getAll();
-    const filtered = students.filter((s) => s.id !== id);
-    await AsyncStorage.setItem(STUDENTS_KEY, JSON.stringify(filtered));
+    const customers = await this.getAll();
+    const filtered = customers.filter((c) => c.id !== id);
+    await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(filtered));
   },
 
   /**
-   * Search students by name, regNo, or mobile (case-insensitive)
+   * Search customers by name, mobile, or category (case-insensitive)
    */
   async search(query) {
     if (!query || query.trim().length === 0) {
       return this.getAll();
     }
-    const students = await this.getAll();
+    const customers = await this.getAll();
     const q = query.toLowerCase().trim();
-    return students.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        s.regNo.toLowerCase().includes(q) ||
-        s.mobile.includes(q)
+    return customers.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.mobile.includes(q) ||
+        (c.category && c.category.toLowerCase().includes(q))
     );
   },
 
   /**
-   * Get a student by ID
+   * Get a customer by ID
    */
   async getById(id) {
-    const students = await this.getAll();
-    return students.find((s) => s.id === id) || null;
+    const customers = await this.getAll();
+    return customers.find((c) => c.id === id) || null;
   },
 
   /**
-   * Accumulate lifetime stats for a student
+   * Accumulate lifetime stats for a customer
    */
-  async updateStats(studentId, addedWeight, addedAmount) {
-    const students = await this.getAll();
-    const index = students.findIndex((s) => s.id === studentId);
+  async updateStats(customerId, addedWeight, addedAmount) {
+    const customers = await this.getAll();
+    const index = customers.findIndex((c) => c.id === customerId);
     if (index !== -1) {
-      students[index].totalWeight = (students[index].totalWeight || 0) + addedWeight;
-      students[index].totalAmountPaid = (students[index].totalAmountPaid || 0) + addedAmount;
-      await AsyncStorage.setItem(STUDENTS_KEY, JSON.stringify(students));
+      customers[index].totalWeight = (customers[index].totalWeight || 0) + addedWeight;
+      customers[index].totalAmountPaid = (customers[index].totalAmountPaid || 0) + addedAmount;
+      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
     }
   },
 };
+
+// Keep backward-compatible alias
+export const StudentService = CustomerService;
 
 // ============================================================
 // Bill Service
@@ -118,21 +135,45 @@ export const BillService = {
   },
 
   /**
-   * Save a new bill. Auto-generates billId and timestamp.
+   * Save a new bill with cart-based structure.
+   * billData.cartItems is an array of:
+   *   { serviceType, weight, items: [{category, count}], ratePerKg, subtotal }
    */
   async save(billData) {
     const bills = await this.getAll();
 
+    // Generate Sequential ID: WLS-YYMMDD-XXX
+    const today = new Date();
+    const yy = String(today.getFullYear()).slice(-2);
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const datePrefix = `${yy}${mm}${dd}`;
+    
+    let maxSeq = 0;
+    const prefixStr = `WLS-${datePrefix}-`;
+    
+    bills.forEach(b => {
+      if (b.id && b.id.startsWith(prefixStr)) {
+        const seqStr = b.id.replace(prefixStr, '');
+        const seq = parseInt(seqStr, 10);
+        if (!isNaN(seq) && seq > maxSeq) {
+          maxSeq = seq;
+        }
+      }
+    });
+
+    const newSeq = maxSeq + 1;
+    const newBillId = `WLS-${datePrefix}-${String(newSeq).padStart(3, '0')}`;
+
     const newBill = {
-      id: generateBillId(),
-      studentId: billData.studentId,
-      studentName: billData.studentName,
-      regNo: billData.regNo,
+      id: newBillId,
+      customerId: billData.customerId,
+      customerName: billData.customerName,
+      customerCategory: billData.customerCategory || 'Student',
       mobile: billData.mobile,
-      weight: parseFloat(billData.weight),
-      clothesCount: parseInt(billData.clothesCount, 10),
-      serviceType: billData.serviceType,
-      ratePerKg: billData.ratePerKg,
+      cartItems: billData.cartItems || [],
+      totalWeight: billData.totalWeight || 0,
+      totalClothesCount: billData.totalClothesCount || 0,
       totalAmount: billData.totalAmount,
       createdAt: Date.now(),
     };
@@ -143,7 +184,7 @@ export const BillService = {
   },
 
   /**
-   * Search bills by regNo or date string
+   * Search bills by name, mobile, date, or bill ID
    */
   async search(query) {
     if (!query || query.trim().length === 0) {
@@ -153,11 +194,12 @@ export const BillService = {
     const q = query.toLowerCase().trim();
     return bills.filter((b) => {
       const dateStr = new Date(b.createdAt).toLocaleDateString('en-IN');
+      const name = b.customerName || b.studentName || '';
       return (
-        b.regNo.toLowerCase().includes(q) ||
-        b.studentName.toLowerCase().includes(q) ||
+        name.toLowerCase().includes(q) ||
         dateStr.includes(q) ||
-        b.id.toLowerCase().includes(q)
+        b.id.toLowerCase().includes(q) ||
+        (b.mobile && b.mobile.includes(q))
       );
     });
   },
@@ -171,15 +213,17 @@ export const BillService = {
   },
 
   /**
-   * Mark payment as done (Update student stats and delete the bill)
+   * Mark payment as done (Update customer stats and delete the bill)
    */
   async markPaymentDone(billId) {
     const bills = await this.getAll();
     const billIndex = bills.findIndex((b) => b.id === billId);
     if (billIndex !== -1) {
       const bill = bills[billIndex];
-      // 1. Update student stats
-      await StudentService.updateStats(bill.studentId, bill.weight, bill.totalAmount);
+      const totalWeight = bill.totalWeight || bill.weight || 0;
+      const customerId = bill.customerId || bill.studentId;
+      // 1. Update customer stats
+      await CustomerService.updateStats(customerId, totalWeight, bill.totalAmount);
       // 2. Remove bill from storage
       bills.splice(billIndex, 1);
       await AsyncStorage.setItem(BILLS_KEY, JSON.stringify(bills));

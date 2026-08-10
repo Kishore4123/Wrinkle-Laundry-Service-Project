@@ -1,73 +1,73 @@
-// StudentsScreen — List all students with search, delete, and FAB to add
+// CustomersScreen — List all customers with search, delete, and FAB to add
 import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, FlatList, Alert } from 'react-native';
+import { View, StyleSheet, FlatList } from 'react-native';
 import { Searchbar, FAB, Text, Dialog, Portal, Button } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
-import { StudentService } from '../services/storage';
-import StudentCard from '../components/StudentCard';
+import { CustomerService } from '../services/storage';
+import CustomerCard from '../components/CustomerCard';
 import EmptyState from '../components/EmptyState';
 import { appColors } from '../theme/theme';
 
-export default function StudentsScreen({ navigation }) {
-  const [students, setStudents] = useState([]);
+export default function CustomersScreen({ navigation }) {
+  const [customers, setCustomers] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
-  const [deleteDialog, setDeleteDialog] = useState({ visible: false, student: null });
+  const [deleteDialog, setDeleteDialog] = useState({ visible: false, customer: null });
 
-  // Reload students whenever this screen comes into focus
+  // Reload customers whenever this screen comes into focus
   useFocusEffect(
     useCallback(() => {
-      loadStudents();
+      loadCustomers();
     }, [])
   );
 
-  const loadStudents = async () => {
+  const loadCustomers = async () => {
     setLoading(true);
-    const data = await StudentService.getAll();
-    setStudents(data);
+    const data = await CustomerService.getAll();
+    setCustomers(data);
     setLoading(false);
   };
 
   const handleSearch = async (query) => {
     setSearchQuery(query);
     if (query.trim().length === 0) {
-      loadStudents();
+      loadCustomers();
     } else {
-      const results = await StudentService.search(query);
-      setStudents(results);
+      const results = await CustomerService.search(query);
+      setCustomers(results);
     }
   };
 
-  const confirmDelete = (student) => {
-    setDeleteDialog({ visible: true, student });
+  const confirmDelete = (customer) => {
+    setDeleteDialog({ visible: true, customer });
   };
 
   const handleDelete = async () => {
-    if (deleteDialog.student) {
-      await StudentService.delete(deleteDialog.student.id);
-      setDeleteDialog({ visible: false, student: null });
-      loadStudents();
+    if (deleteDialog.customer) {
+      await CustomerService.delete(deleteDialog.customer.id);
+      setDeleteDialog({ visible: false, customer: null });
+      loadCustomers();
     }
   };
 
   const renderItem = ({ item }) => (
-    <StudentCard student={item} onDelete={confirmDelete} />
+    <CustomerCard customer={item} onDelete={confirmDelete} />
   );
 
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Students</Text>
+        <Text style={styles.headerTitle}>Customers</Text>
         <Text style={styles.headerSubtitle}>
-          {students.length} registered student{students.length !== 1 ? 's' : ''}
+          {customers.length} registered customer{customers.length !== 1 ? 's' : ''}
         </Text>
       </View>
 
       {/* Search */}
       <View style={styles.searchContainer}>
         <Searchbar
-          placeholder="Search by name, reg no, or mobile..."
+          placeholder="Search by name or mobile..."
           onChangeText={handleSearch}
           value={searchQuery}
           style={styles.searchbar}
@@ -78,19 +78,19 @@ export default function StudentsScreen({ navigation }) {
 
       {/* List */}
       <FlatList
-        data={students}
+        data={customers}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        contentContainerStyle={students.length === 0 ? styles.emptyContainer : styles.listContent}
+        contentContainerStyle={customers.length === 0 ? styles.emptyContainer : styles.listContent}
         ListEmptyComponent={
           <EmptyState
             icon="account-group-outline"
-            title="No Students Yet"
-            subtitle="Tap the + button below to add your first student."
+            title="No Customers Yet"
+            subtitle="Tap the + button below to add your first customer."
           />
         }
         refreshing={loading}
-        onRefresh={loadStudents}
+        onRefresh={loadCustomers}
         showsVerticalScrollIndicator={false}
       />
 
@@ -98,7 +98,7 @@ export default function StudentsScreen({ navigation }) {
       <FAB
         icon="plus"
         style={styles.fab}
-        onPress={() => navigation.navigate('AddStudent')}
+        onPress={() => navigation.navigate('AddCustomer')}
         color="#FFFFFF"
         customSize={60}
       />
@@ -107,21 +107,21 @@ export default function StudentsScreen({ navigation }) {
       <Portal>
         <Dialog
           visible={deleteDialog.visible}
-          onDismiss={() => setDeleteDialog({ visible: false, student: null })}
+          onDismiss={() => setDeleteDialog({ visible: false, customer: null })}
           style={styles.dialog}
         >
           <Dialog.Icon icon="alert-circle-outline" color={appColors.error} size={40} />
-          <Dialog.Title style={styles.dialogTitle}>Delete Student?</Dialog.Title>
+          <Dialog.Title style={styles.dialogTitle}>Delete Customer?</Dialog.Title>
           <Dialog.Content>
             <Text style={styles.dialogText}>
               Are you sure you want to delete{' '}
-              <Text style={styles.dialogBold}>{deleteDialog.student?.name}</Text>?
+              <Text style={styles.dialogBold}>{deleteDialog.customer?.name}</Text>?
               This action cannot be undone.
             </Text>
           </Dialog.Content>
           <Dialog.Actions style={styles.dialogActions}>
             <Button
-              onPress={() => setDeleteDialog({ visible: false, student: null })}
+              onPress={() => setDeleteDialog({ visible: false, customer: null })}
               textColor={appColors.textSecondary}
             >
               Cancel

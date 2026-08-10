@@ -8,13 +8,14 @@ import { appColors } from '../theme/theme';
 
 // Screens
 import BillGenerationScreen from '../screens/BillGenerationScreen';
-import StudentsScreen from '../screens/StudentsScreen';
-import AddStudentScreen from '../screens/AddStudentScreen';
+import CustomersScreen from '../screens/CustomersScreen';
+import AddCustomerScreen from '../screens/AddCustomerScreen';
 import HistoryScreen from '../screens/HistoryScreen';
 import QRScannerScreen from '../screens/QRScannerScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 
 const Tab = createBottomTabNavigator();
-const StudentStack = createStackNavigator();
+const CustomerStack = createStackNavigator();
 
 // Shared header styles
 const screenOptions = {
@@ -32,27 +33,27 @@ const screenOptions = {
   headerBackTitleVisible: false,
 };
 
-// Student stack (list + add form)
-function StudentStackNavigator() {
+// Customer stack (list + add form)
+function CustomerStackNavigator() {
   return (
-    <StudentStack.Navigator screenOptions={screenOptions}>
-      <StudentStack.Screen
-        name="StudentsList"
-        component={StudentsScreen}
+    <CustomerStack.Navigator screenOptions={screenOptions}>
+      <CustomerStack.Screen
+        name="CustomersList"
+        component={CustomersScreen}
         options={{ headerShown: false }}
       />
-      <StudentStack.Screen
-        name="AddStudent"
-        component={AddStudentScreen}
+      <CustomerStack.Screen
+        name="AddCustomer"
+        component={AddCustomerScreen}
         options={{
-          title: 'Add Student',
+          title: 'Add Customer',
           headerStyle: {
             ...screenOptions.headerStyle,
             backgroundColor: appColors.background,
           },
         }}
       />
-    </StudentStack.Navigator>
+    </CustomerStack.Navigator>
   );
 }
 
@@ -69,12 +70,14 @@ export default function AppNavigator() {
           let iconName;
           if (route.name === 'Bills') {
             iconName = focused ? 'receipt' : 'receipt-text-outline';
-          } else if (route.name === 'Students') {
+          } else if (route.name === 'Customers') {
             iconName = focused ? 'account-group' : 'account-group-outline';
           } else if (route.name === 'History') {
             iconName = focused ? 'clipboard-text-clock' : 'clipboard-text-clock-outline';
           } else if (route.name === 'Scan') {
             iconName = focused ? 'qrcode-scan' : 'qrcode-scan';
+          } else if (route.name === 'Settings') {
+            iconName = focused ? 'cog' : 'cog-outline';
           }
           return <MaterialCommunityIcons name={iconName} size={size} color={color} />;
         },
@@ -98,9 +101,9 @@ export default function AppNavigator() {
         options={{ tabBarLabel: 'New Bill' }}
       />
       <Tab.Screen
-        name="Students"
-        component={StudentStackNavigator}
-        options={{ tabBarLabel: 'Students' }}
+        name="Customers"
+        component={CustomerStackNavigator}
+        options={{ tabBarLabel: 'Customers' }}
       />
       <Tab.Screen
         name="History"
@@ -111,6 +114,11 @@ export default function AppNavigator() {
         name="Scan"
         component={QRScannerScreen}
         options={{ tabBarLabel: 'Scan' }}
+      />
+      <Tab.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{ tabBarLabel: 'Settings' }}
       />
     </Tab.Navigator>
   );

@@ -1,24 +1,29 @@
 // BillConfirmationModal — Shows bill summary + WhatsApp send + Done buttons
+// Supports cart-based bills with multiple service entries
 import React from 'react';
-import { View, StyleSheet, Linking, Alert } from 'react-native';
-import { Modal, Portal, Text, Button } from 'react-native-paper';
+import { View, StyleSheet, Linking, Alert, ScrollView } from 'react-native';
+import { Modal, Portal, Text, Button, Chip } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { appColors, SERVICE_TYPES } from '../theme/theme';
 import { formatDate, formatCurrency, buildWhatsAppUrl, buildBillMessage } from '../utils/helpers';
+
 export default function BillConfirmationModal({ visible, bill, onDismiss }) {
   if (!bill) return null;
 
-  const service = SERVICE_TYPES[bill.serviceType];
+  const customerName = bill.customerName || bill.studentName || 'Customer';
+  const customerCategory = bill.customerCategory || 'Student';
+  const mobile = bill.mobile || '';
+  const hasCart = bill.cartItems && bill.cartItems.length > 0;
 
   const handleSendWhatsApp = async () => {
     try {
       const message = buildBillMessage(bill);
-      const url = buildWhatsAppUrl(bill.mobile, message);
+      const url = buildWhatsAppUrl(mobile, message);
       const canOpen = await Linking.canOpenURL(url);
       if (canOpen) {
         await Linking.openURL(url);
       } else {
-        const webUrl = `https://wa.me/91${bill.mobile}?text=${encodeURIComponent(buildBillMessage(bill))}`;
+        const webUrl = `https://wa.me/91${mobile}?text=${encodeURIComponent(buildBillMessage(bill))}`;
         await Linking.openURL(webUrl);
       }
     } catch (error) {
@@ -33,62 +38,108 @@ export default function BillConfirmationModal({ visible, bill, onDismiss }) {
         onDismiss={onDismiss}
         contentContainerStyle={styles.modal}
       >
-        {/* Success Icon */}
-        <View style={styles.successCircle}>
-          <MaterialCommunityIcons name="check-bold" size={36} color="#FFFFFF" />
-        </View>
-        <Text style={styles.title}>Bill Generated! 🎉</Text>
-        <Text style={styles.billId}>{bill.id}</Text>
-
-        {/* Bill Summary */}
-        <View style={styles.summaryCard}>
-          <SummaryRow label="Student" value={bill.studentName} />
-          <SummaryRow label="Reg No" value={bill.regNo} />
-          <SummaryRow label="Date" value={formatDate(bill.createdAt)} />
-          <SummaryRow label="Weight" value={`${bill.weight} kg`} />
-          <SummaryRow label="Items" value={`${bill.clothesCount}`} />
-          <SummaryRow label="Service" value={service?.label || bill.serviceType} />
-          <SummaryRow label="Rate" value={`₹${bill.ratePerKg}/kg`} />
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total Amount</Text>
-            <Text style={styles.totalValue}>{formatCurrency(bill.totalAmount)}</Text>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+          {/* Success Icon */}
+          <View style={styles.successCircle}>
+            <MaterialCommunityIcons name="check-bold" size={36} color="#FFFFFF" />
           </View>
-        </View>
+          <Text style={styles.title}>Bill Generated! 🎉</Text>
+          <Text style={styles.billId}>{bill.id}</Text>
 
-        {/* Actions */}
-        <Button
-          mode="contained"
-          onPress={handleSendWhatsApp}
-          icon={({ size, color }) => (
-            <MaterialCommunityIcons name="whatsapp" size={size} color={color} />
-          )}
-          style={styles.whatsappButton}
-          contentStyle={styles.whatsappButtonContent}
-          labelStyle={styles.whatsappButtonLabel}
-          buttonColor="#25D366"
-        >
-          Send Bill via WhatsApp
-        </Button>
+          {/* Bill Summary */}
+          <View style={styles.summaryCard}>
+            <SummaryRow label="Customer" value={customerName} />
+            <SummaryRow label="Type" value={customerCategory} />
+            <SummaryRow label="Date" value={formatDate(bill.createdAt)} />
 
-        <Button
-          mode="outlined"
-          onPress={onDismiss}
-          style={styles.doneButton}
-          contentStyle={styles.doneButtonContent}
-          labelStyle={styles.doneButtonLabel}
-        >
-          Done
-        </Button>
+            {hasCart ? (
+              <>
+                {bill.cartItems.map((cartItem, idx) => {
+                  const service = SERVICE_TYPES[cartItem.serviceType];
+                  const totalItems = (cartItem.items || []).reduce((s, i) => s + i.count, 0);
+                  return (
+                    <View key={idx} style={styles.cartItemSection}>
+                      <View style={styles.cartItemHeader}>
+                        <View style={[styles.cartBadge, { backgroundColor: service?.bgColor || '#EEF2FF' }]}>
+                          <Text style={[styles.cartBadgeText, { color: service?.color || appColors.primary }]}>
+                            {idx + 1}
+                          </Text>
+                        </View>
+                        <Text style={styles.cartServiceName}>{service?.label || cartItem.serviceType}</Text>
+                      </View>
+                      <SummaryRow label="Weight" value={`${cartItem.weight} kg`} />
+                      {totalItems > 0 && (
+                        <SummaryRow label="Items" value={`${totalItems}`} />
+                      )}
+                      <SummaryRow label="Rate" value={`₹${cartItem.ratePerKg}/kg`} />
+                      <SummaryRow label="Subtotal" value={formatCurrency(cartItem.subtotal)} bold />
+
+                      {cartItem.items && cartItem.items.length > 0 && (
+                        <View style={styles.itemChips}>
+                          {cartItem.items.map((item, iIdx) => (
+                            <Chip key={iIdx} compact mode="flat" style={styles.chip} textStyle={styles.chipText}>
+                              {item.count}× {item.label || item.category}
+                            </Chip>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+              </>
+            ) : (
+              <>
+                <SummaryRow label="Weight" value={`${bill.weight || bill.totalWeight} kg`} />
+                <SummaryRow label="Items" value={`${bill.clothesCount || bill.totalClothesCount || 0}`} />
+                <SummaryRow
+                  label="Service"
+                  value={SERVICE_TYPES[bill.serviceType]?.label || bill.serviceType}
+                />
+                <SummaryRow label="Rate" value={`₹${bill.ratePerKg}/kg`} />
+              </>
+            )}
+
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Total Amount</Text>
+              <Text style={styles.totalValue}>{formatCurrency(bill.totalAmount)}</Text>
+            </View>
+          </View>
+
+          {/* Actions */}
+          <Button
+            mode="contained"
+            onPress={handleSendWhatsApp}
+            icon={({ size, color }) => (
+              <MaterialCommunityIcons name="whatsapp" size={size} color={color} />
+            )}
+            style={styles.whatsappButton}
+            contentStyle={styles.whatsappButtonContent}
+            labelStyle={styles.whatsappButtonLabel}
+            buttonColor="#25D366"
+          >
+            Send Bill via WhatsApp
+          </Button>
+
+          <Button
+            mode="outlined"
+            onPress={onDismiss}
+            style={styles.doneButton}
+            contentStyle={styles.doneButtonContent}
+            labelStyle={styles.doneButtonLabel}
+          >
+            Done
+          </Button>
+        </ScrollView>
       </Modal>
     </Portal>
   );
 }
 
-function SummaryRow({ label, value }) {
+function SummaryRow({ label, value, bold }) {
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue}>{value}</Text>
+      <Text style={[styles.rowValue, bold && styles.rowValueBold]}>{value}</Text>
     </View>
   );
 }
@@ -99,6 +150,9 @@ const styles = StyleSheet.create({
     marginHorizontal: 24,
     borderRadius: 24,
     padding: 28,
+    maxHeight: '85%',
+  },
+  scrollContent: {
     alignItems: 'center',
   },
   successCircle: {
@@ -152,6 +206,53 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     flexShrink: 1,
     marginLeft: 12,
+  },
+  rowValueBold: {
+    fontWeight: '800',
+    color: appColors.primary,
+  },
+  cartItemSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: appColors.border,
+  },
+  cartItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  cartBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  cartServiceName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: appColors.text,
+  },
+  itemChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 6,
+  },
+  chip: {
+    backgroundColor: appColors.surface,
+    height: 24,
+  },
+  chipText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: appColors.textSecondary,
   },
   totalRow: {
     flexDirection: 'row',

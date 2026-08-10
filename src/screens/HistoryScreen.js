@@ -1,7 +1,7 @@
-// HistoryScreen — Chronological list of all generated bills with search and resend
+// HistoryScreen — Chronological list of all generated bills with search and payment
 import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, FlatList } from 'react-native';
-import { Searchbar, Text, Modal, Portal, Button } from 'react-native-paper';
+import { View, StyleSheet, FlatList, ScrollView } from 'react-native';
+import { Searchbar, Text, Modal, Portal, Button, Chip } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
 import { BillService } from '../services/storage';
 import BillCard from '../components/BillCard';
@@ -105,7 +105,7 @@ export default function HistoryScreen({ route, navigation }) {
       {/* Search */}
       <View style={styles.searchContainer}>
         <Searchbar
-          placeholder="Search by reg no, name, or bill ID..."
+          placeholder="Search by name, mobile, or bill ID..."
           onChangeText={handleSearch}
           value={searchQuery}
           style={styles.searchbar}
@@ -140,7 +140,7 @@ export default function HistoryScreen({ route, navigation }) {
           contentContainerStyle={styles.modal}
         >
           {selectedBill && (
-            <>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalScroll}>
               <View style={styles.iconCircle}>
                 <MaterialCommunityIcons name="cash-register" size={32} color="#FFFFFF" />
               </View>
@@ -148,12 +148,41 @@ export default function HistoryScreen({ route, navigation }) {
               <Text style={styles.billId}>{selectedBill.id}</Text>
 
               <View style={styles.summaryCard}>
-                <SummaryRow label="Student" value={selectedBill.studentName} />
-                <SummaryRow label="Weight" value={`${selectedBill.weight} kg`} />
-                <SummaryRow 
-                  label="Service" 
-                  value={SERVICE_TYPES[selectedBill.serviceType]?.label || selectedBill.serviceType} 
-                />
+                <SummaryRow label="Customer" value={selectedBill.customerName || selectedBill.studentName} />
+
+                {/* Cart items display */}
+                {selectedBill.cartItems && selectedBill.cartItems.length > 0 ? (
+                  <>
+                    {selectedBill.cartItems.map((cartItem, idx) => {
+                      const service = SERVICE_TYPES[cartItem.serviceType];
+                      const itemCount = (cartItem.items || []).reduce((s, i) => s + i.count, 0);
+                      return (
+                        <View key={idx} style={styles.cartSection}>
+                          <View style={styles.cartHeader}>
+                            <View style={[styles.cartBadge, { backgroundColor: service?.bgColor || '#EEF2FF' }]}>
+                              <Text style={[styles.cartBadgeText, { color: service?.color || appColors.primary }]}>
+                                {idx + 1}
+                              </Text>
+                            </View>
+                            <Text style={styles.cartServiceName}>{service?.label || cartItem.serviceType}</Text>
+                          </View>
+                          <SummaryRow label="Weight" value={`${cartItem.weight} kg`} />
+                          {itemCount > 0 && <SummaryRow label="Items" value={`${itemCount}`} />}
+                          <SummaryRow label="Rate" value={`₹${cartItem.ratePerKg}/kg`} />
+                          <SummaryRow label="Subtotal" value={formatCurrency(cartItem.subtotal)} />
+                        </View>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <>
+                    <SummaryRow label="Weight" value={`${selectedBill.weight || selectedBill.totalWeight} kg`} />
+                    <SummaryRow 
+                      label="Service" 
+                      value={SERVICE_TYPES[selectedBill.serviceType]?.label || selectedBill.serviceType} 
+                    />
+                  </>
+                )}
                 
                 <View style={styles.totalRow}>
                   <Text style={styles.totalLabel}>Total Amount</Text>
@@ -177,7 +206,7 @@ export default function HistoryScreen({ route, navigation }) {
               >
                 Cancel
               </Button>
-            </>
+            </ScrollView>
           )}
         </Modal>
       </Portal>
@@ -261,6 +290,9 @@ const styles = StyleSheet.create({
     marginHorizontal: 24,
     borderRadius: 24,
     padding: 28,
+    maxHeight: '85%',
+  },
+  modalScroll: {
     alignItems: 'center',
   },
   iconCircle: {
@@ -314,6 +346,34 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     flexShrink: 1,
     marginLeft: 12,
+  },
+  cartSection: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: appColors.border,
+  },
+  cartHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  cartBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  cartServiceName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: appColors.text,
   },
   totalRow: {
     flexDirection: 'row',

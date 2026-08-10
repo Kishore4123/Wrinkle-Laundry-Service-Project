@@ -1,4 +1,5 @@
 // BillCard — Displays a bill summary in a card with WhatsApp resend
+// Supports both new cart-based bills and legacy single-service bills
 import React from 'react';
 import { View, StyleSheet, TouchableOpacity, Linking, Alert } from 'react-native';
 import { Text, Chip } from 'react-native-paper';
@@ -7,18 +8,36 @@ import { appColors, SERVICE_TYPES } from '../theme/theme';
 import { formatDate, formatCurrency, buildWhatsAppUrl, buildBillMessage } from '../utils/helpers';
 
 export default function BillCard({ bill, onPress }) {
-  const service = SERVICE_TYPES[bill.serviceType];
+  const customerName = bill.customerName || bill.studentName || 'Customer';
+  const mobile = bill.mobile || '';
+
+  // Determine service display
+  const getServiceDisplay = () => {
+    if (bill.cartItems && bill.cartItems.length > 0) {
+      if (bill.cartItems.length === 1) {
+        const svc = SERVICE_TYPES[bill.cartItems[0].serviceType];
+        return { label: svc?.label || bill.cartItems[0].serviceType, color: svc?.color, bgColor: svc?.bgColor };
+      }
+      return { label: `${bill.cartItems.length} Services`, color: appColors.tertiary, bgColor: '#FEF3C7' };
+    }
+    // Legacy bill
+    const svc = SERVICE_TYPES[bill.serviceType];
+    return { label: svc?.label || bill.serviceType, color: svc?.color || appColors.primary, bgColor: svc?.bgColor || '#EEF2FF' };
+  };
+
+  const serviceDisplay = getServiceDisplay();
+  const totalWeight = bill.totalWeight || bill.weight || 0;
+  const totalItems = bill.totalClothesCount || bill.clothesCount || 0;
 
   const handleWhatsApp = async () => {
     try {
       const message = buildBillMessage(bill);
-      const url = buildWhatsAppUrl(bill.mobile, message);
+      const url = buildWhatsAppUrl(mobile, message);
       const canOpen = await Linking.canOpenURL(url);
       if (canOpen) {
         await Linking.openURL(url);
       } else {
-        // Fallback to web WhatsApp
-        const webUrl = `https://wa.me/91${bill.mobile}?text=${encodeURIComponent(buildBillMessage(bill))}`;
+        const webUrl = `https://wa.me/91${mobile}?text=${encodeURIComponent(buildBillMessage(bill))}`;
         await Linking.openURL(webUrl);
       }
     } catch (error) {
@@ -39,14 +58,14 @@ export default function BillCard({ bill, onPress }) {
         </TouchableOpacity>
       </View>
 
-      {/* Student Info */}
-      <View style={styles.studentRow}>
+      {/* Customer Info */}
+      <View style={styles.customerRow}>
         <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{bill.studentName.charAt(0).toUpperCase()}</Text>
+          <Text style={styles.avatarText}>{customerName.charAt(0).toUpperCase()}</Text>
         </View>
-        <View style={styles.studentInfo}>
-          <Text style={styles.studentName} numberOfLines={1}>{bill.studentName}</Text>
-          <Text style={styles.regNo}>{bill.regNo}</Text>
+        <View style={styles.customerInfo}>
+          <Text style={styles.customerName} numberOfLines={1}>{customerName}</Text>
+          <Text style={styles.mobile}>{mobile}</Text>
         </View>
       </View>
 
@@ -54,25 +73,21 @@ export default function BillCard({ bill, onPress }) {
       <View style={styles.detailsRow}>
         <View style={styles.detailItem}>
           <MaterialCommunityIcons name="weight-kilogram" size={18} color={appColors.textSecondary} />
-          <Text style={styles.detailValue}>{bill.weight} kg</Text>
+          <Text style={styles.detailValue}>{totalWeight} kg</Text>
         </View>
-        <View style={styles.detailItem}>
-          <MaterialCommunityIcons name="tshirt-crew-outline" size={18} color={appColors.textSecondary} />
-          <Text style={styles.detailValue}>{bill.clothesCount} items</Text>
-        </View>
+        {totalItems > 0 && (
+          <View style={styles.detailItem}>
+            <MaterialCommunityIcons name="tshirt-crew-outline" size={18} color={appColors.textSecondary} />
+            <Text style={styles.detailValue}>{totalItems} items</Text>
+          </View>
+        )}
         <Chip
           mode="flat"
           compact
-          style={[
-            styles.serviceChip,
-            { backgroundColor: bill.serviceType === 'WASH_ONLY' ? '#EEF2FF' : '#CCFBF1' },
-          ]}
-          textStyle={[
-            styles.serviceChipText,
-            { color: bill.serviceType === 'WASH_ONLY' ? appColors.primary : appColors.secondary },
-          ]}
+          style={[styles.serviceChip, { backgroundColor: serviceDisplay.bgColor || '#EEF2FF' }]}
+          textStyle={[styles.serviceChipText, { color: serviceDisplay.color || appColors.primary }]}
         >
-          {service?.label || bill.serviceType}
+          {serviceDisplay.label}
         </Chip>
       </View>
 
@@ -129,7 +144,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
   },
-  studentRow: {
+  customerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 14,
@@ -148,15 +163,15 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: appColors.primary,
   },
-  studentInfo: {
+  customerInfo: {
     flex: 1,
   },
-  studentName: {
+  customerName: {
     fontSize: 15,
     fontWeight: '600',
     color: appColors.text,
   },
-  regNo: {
+  mobile: {
     fontSize: 13,
     color: appColors.textSecondary,
     marginTop: 1,
