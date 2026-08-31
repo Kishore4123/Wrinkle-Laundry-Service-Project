@@ -1,4 +1,4 @@
-﻿// App.js — Entry point for Wrinkle Laundry Service app
+// App.js — Entry point for College Laundry Services app
 import 'react-native-url-polyfill/auto';
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
@@ -15,9 +15,9 @@ export default function App() {
       <PaperProvider theme={theme}>
         <WebRTCProvider>
           <NavigationContainer>
-            <StatusBar style="auto" />
-            <AppNavigator />
-          </NavigationContainer>
+          <StatusBar style="auto" />
+          <AppNavigator />
+        </NavigationContainer>
         </WebRTCProvider>
       </PaperProvider>
     </SafeAreaProvider>

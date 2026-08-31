@@ -1,8 +1,7 @@
-﻿// SettingsScreen â€” Admin pricing editor and app info
-// Full CRUD for categories and piece-rate items
+// SettingsScreen — Admin pricing editor and app info
 import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, ScrollView, Image, KeyboardAvoidingView, Platform, TouchableOpacity, Alert } from 'react-native';
-import { TextInput, Button, Text, Snackbar, Divider, List, Dialog, Portal, IconButton } from 'react-native-paper';
+import { View, StyleSheet, ScrollView, Image, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
+import { TextInput, Button, Text, Snackbar, Divider, List } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { SettingsService } from '../services/settingsStorage';
@@ -21,14 +20,6 @@ export default function SettingsScreen() {
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [pairingVisible, setPairingVisible] = useState(false);
 
-  // Dialog states for category rename
-  const [renameCatVisible, setRenameCatVisible] = useState(false);
-  const [renameCatValue, setRenameCatValue] = useState('');
-
-  // Dialog states for item operations
-  const [editItemDialog, setEditItemDialog] = useState({ visible: false, serviceKey: '', oldName: '', newName: '' });
-  const [addItemDialog, setAddItemDialog] = useState({ visible: false, serviceKey: '', name: '', rate: '' });
-
   useFocusEffect(
     useCallback(() => {
       loadSettings();
@@ -43,8 +34,6 @@ export default function SettingsScreen() {
     }
   };
 
-  // â”€â”€â”€ Category CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
   const handleAddCategory = () => {
     const name = newCategoryName.trim();
     if (!name) return;
@@ -56,77 +45,14 @@ export default function SettingsScreen() {
     // Copy defaults from Student or first available
     const newCat = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES_PRICING.Student || categories[Object.keys(categories)[0]]));
     
-    const updated = { ...categories, [name]: newCat };
-    setCategories(updated);
+    setCategories({
+      ...categories,
+      [name]: newCat
+    });
     setNewCategoryName('');
     setShowAddCategory(false);
     setSelectedCategory(name);
-    persistCategories(updated);
   };
-
-  const openRenameCategory = () => {
-    if (!selectedCategory) return;
-    setRenameCatValue(selectedCategory);
-    setRenameCatVisible(true);
-  };
-
-  const handleRenameCategory = () => {
-    const newName = renameCatValue.trim();
-    if (!newName || newName === selectedCategory) {
-      setRenameCatVisible(false);
-      return;
-    }
-    if (categories[newName]) {
-      setSnackbar({ visible: true, message: 'A category with that name already exists', type: 'error' });
-      return;
-    }
-
-    const updated = {};
-    for (const key of Object.keys(categories)) {
-      if (key === selectedCategory) {
-        updated[newName] = categories[key];
-      } else {
-        updated[key] = categories[key];
-      }
-    }
-
-    setCategories(updated);
-    setSelectedCategory(newName);
-    setRenameCatVisible(false);
-    persistCategories(updated);
-    setSnackbar({ visible: true, message: `Renamed to "${newName}"`, type: 'success' });
-  };
-
-  const handleDeleteCategory = () => {
-    if (!selectedCategory) return;
-    const catNames = Object.keys(categories);
-    if (catNames.length <= 1) {
-      setSnackbar({ visible: true, message: 'Cannot delete the last category', type: 'error' });
-      return;
-    }
-
-    Alert.alert(
-      'Delete Category',
-      `Are you sure you want to delete "${selectedCategory}"? This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            const updated = { ...categories };
-            delete updated[selectedCategory];
-            setCategories(updated);
-            setSelectedCategory(Object.keys(updated)[0]);
-            persistCategories(updated);
-            setSnackbar({ visible: true, message: 'Category deleted', type: 'success' });
-          },
-        },
-      ]
-    );
-  };
-
-  // â”€â”€â”€ Kg Rate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const updateKgRate = (serviceKey, value) => {
     setCategories(prev => ({
@@ -140,8 +66,6 @@ export default function SettingsScreen() {
       }
     }));
   };
-
-  // â”€â”€â”€ Piece Rate Item CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const updatePieceRate = (serviceKey, pieceKey, value) => {
     setCategories(prev => ({
@@ -157,125 +81,6 @@ export default function SettingsScreen() {
         }
       }
     }));
-  };
-
-  const openEditItemDialog = (serviceKey, itemName) => {
-    setEditItemDialog({ visible: true, serviceKey, oldName: itemName, newName: itemName });
-  };
-
-  const handleEditItemName = () => {
-    const { serviceKey, oldName, newName } = editItemDialog;
-    const trimmedName = newName.trim();
-    if (!trimmedName || trimmedName === oldName) {
-      setEditItemDialog({ ...editItemDialog, visible: false });
-      return;
-    }
-
-    setCategories(prev => {
-      const catData = prev[selectedCategory];
-      const serviceRates = { ...catData.pieceRates[serviceKey] };
-      const rate = serviceRates[oldName];
-      delete serviceRates[oldName];
-      serviceRates[trimmedName] = rate;
-      return {
-        ...prev,
-        [selectedCategory]: {
-          ...catData,
-          pieceRates: { ...catData.pieceRates, [serviceKey]: serviceRates }
-        }
-      };
-    });
-
-    setEditItemDialog({ visible: false, serviceKey: '', oldName: '', newName: '' });
-    setSnackbar({ visible: true, message: `Renamed "${oldName}" to "${trimmedName}"`, type: 'success' });
-  };
-
-  const handleDeleteItem = (serviceKey, itemName) => {
-    Alert.alert(
-      'Delete Item',
-      `Delete "${itemName}" from this service?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            setCategories(prev => {
-              const catData = prev[selectedCategory];
-              const serviceRates = { ...catData.pieceRates[serviceKey] };
-              delete serviceRates[itemName];
-              return {
-                ...prev,
-                [selectedCategory]: {
-                  ...catData,
-                  pieceRates: { ...catData.pieceRates, [serviceKey]: serviceRates }
-                }
-              };
-            });
-            setSnackbar({ visible: true, message: `"${itemName}" deleted`, type: 'success' });
-          },
-        },
-      ]
-    );
-  };
-
-  const openAddItemDialog = (serviceKey) => {
-    setAddItemDialog({ visible: true, serviceKey, name: '', rate: '' });
-  };
-
-  const handleAddItem = () => {
-    const { serviceKey, name, rate } = addItemDialog;
-    const trimmedName = name.trim();
-    const parsedRate = parseFloat(rate) || 0;
-
-    if (!trimmedName) {
-      setSnackbar({ visible: true, message: 'Please enter an item name', type: 'error' });
-      return;
-    }
-
-    const existingRates = categories[selectedCategory]?.pieceRates?.[serviceKey] || {};
-    if (existingRates[trimmedName] !== undefined) {
-      setSnackbar({ visible: true, message: 'Item already exists', type: 'error' });
-      return;
-    }
-
-    setCategories(prev => {
-      const catData = prev[selectedCategory];
-      const serviceRates = { ...catData.pieceRates[serviceKey], [trimmedName]: parsedRate };
-      return {
-        ...prev,
-        [selectedCategory]: {
-          ...catData,
-          pieceRates: { ...catData.pieceRates, [serviceKey]: serviceRates }
-        }
-      };
-    });
-
-    setAddItemDialog({ visible: false, serviceKey: '', name: '', rate: '' });
-    setSnackbar({ visible: true, message: `"${trimmedName}" added`, type: 'success' });
-  };
-
-  // â”€â”€â”€ Persist â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-  const persistCategories = async (cats) => {
-    try {
-      const parsed = JSON.parse(JSON.stringify(cats));
-      for (const cat of Object.keys(parsed)) {
-        const kgRates = parsed[cat].kgRates;
-        for (const k of Object.keys(kgRates)) {
-          kgRates[k] = parseFloat(kgRates[k]) || 0;
-        }
-        const pRates = parsed[cat].pieceRates;
-        for (const sKey of Object.keys(pRates)) {
-          for (const pKey of Object.keys(pRates[sKey])) {
-            pRates[sKey][pKey] = parseFloat(pRates[sKey][pKey]) || 0;
-          }
-        }
-      }
-      await SettingsService.saveCategories(parsed);
-    } catch (error) {
-      console.error('Error auto-saving:', error);
-    }
   };
 
   const handleSave = async () => {
@@ -300,7 +105,7 @@ export default function SettingsScreen() {
       setCategories(parsedCategories);
       setSnackbar({
         visible: true,
-        message: 'Settings updated successfully! âœ“',
+        message: 'Settings updated successfully! ✓',
         type: 'success',
       });
     } catch (error) {
@@ -316,48 +121,6 @@ export default function SettingsScreen() {
 
   const categoryNames = Object.keys(categories);
   const currentCatData = categories[selectedCategory];
-
-  // â”€â”€â”€ Render a piece-rates accordion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-  const renderPieceAccordion = (serviceKey, title, icon, accordionId) => {
-    const items = currentCatData?.pieceRates?.[serviceKey] || {};
-    return (
-      <List.Accordion title={title} id={accordionId} left={props => <List.Icon {...props} icon={icon} />}>
-        {Object.keys(items).map(piece => (
-          <View key={piece} style={styles.rateRow}>
-            <Text style={styles.rateLabel} numberOfLines={1}>{piece}</Text>
-            <TextInput
-              value={String(items[piece])}
-              onChangeText={(t) => updatePieceRate(serviceKey, piece, t.replace(/[^0-9.]/g, ''))}
-              mode="outlined"
-              dense
-              keyboardType="decimal-pad"
-              style={styles.rateInput}
-              left={<TextInput.Affix text="â‚¹" />}
-            />
-            <IconButton
-              icon="pencil-outline"
-              size={18}
-              iconColor={appColors.primary}
-              style={styles.itemActionBtn}
-              onPress={() => openEditItemDialog(serviceKey, piece)}
-            />
-            <IconButton
-              icon="trash-can-outline"
-              size={18}
-              iconColor={appColors.error}
-              style={styles.itemActionBtn}
-              onPress={() => handleDeleteItem(serviceKey, piece)}
-            />
-          </View>
-        ))}
-        <TouchableOpacity style={styles.addItemRow} onPress={() => openAddItemDialog(serviceKey)}>
-          <MaterialCommunityIcons name="plus-circle-outline" size={20} color={appColors.primary} />
-          <Text style={styles.addItemText}>Add New Item</Text>
-        </TouchableOpacity>
-      </List.Accordion>
-    );
-  };
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -385,21 +148,12 @@ export default function SettingsScreen() {
             <TouchableOpacity style={styles.categoryPillAdd} onPress={() => setShowAddCategory(!showAddCategory)}>
               <MaterialCommunityIcons name={showAddCategory ? "minus" : "plus"} size={20} color={appColors.primary} />
             </TouchableOpacity>
-          </ScrollView>
-
-          {/* Category Edit/Delete actions */}
-          {selectedCategory && (
-            <View style={styles.categoryActions}>
-              <TouchableOpacity style={styles.categoryActionBtn} onPress={openRenameCategory}>
-                <MaterialCommunityIcons name="pencil-outline" size={18} color={appColors.primary} />
-                <Text style={styles.categoryActionText}>Rename</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.categoryActionBtn} onPress={handleDeleteCategory}>
-                <MaterialCommunityIcons name="trash-can-outline" size={18} color={appColors.error} />
-                <Text style={[styles.categoryActionText, { color: appColors.error }]}>Delete</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+            {/* Desktop Sync */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Desktop Sync</Text>
+          <SyncStatusBadge onPress={() => setPairingVisible(true)} />
+        </View>
+      </ScrollView>
 
           {showAddCategory && (
             <View style={styles.addCategoryContainer}>
@@ -433,15 +187,45 @@ export default function SettingsScreen() {
                       dense
                       keyboardType="decimal-pad"
                       style={styles.rateInput}
-                      left={<TextInput.Affix text="â‚¹" />}
+                      left={<TextInput.Affix text="₹" />}
                     />
                   </View>
                 ))}
               </List.Accordion>
 
-              {renderPieceAccordion('WASH_ONLY', 'Washing Only (Piece Rates)', 'washing-machine', '2')}
-              {renderPieceAccordion('WASH_AND_IRON', 'Wash & Iron (Piece Rates)', 'tshirt-crew', '3')}
-              {renderPieceAccordion('IRON_STEAM', 'Steam Ironing (Piece Rates)', 'weather-fog', '4')}
+              <List.Accordion title="Wash & Iron (Piece Rates)" id="2" left={props => <List.Icon {...props} icon="tshirt-crew" />}>
+                {Object.keys(currentCatData.pieceRates?.WASH_AND_IRON || {}).map(piece => (
+                  <View key={piece} style={styles.rateRow}>
+                    <Text style={styles.rateLabel}>{piece}</Text>
+                    <TextInput
+                      value={String(currentCatData.pieceRates.WASH_AND_IRON[piece])}
+                      onChangeText={(t) => updatePieceRate('WASH_AND_IRON', piece, t.replace(/[^0-9.]/g, ''))}
+                      mode="outlined"
+                      dense
+                      keyboardType="decimal-pad"
+                      style={styles.rateInput}
+                      left={<TextInput.Affix text="₹" />}
+                    />
+                  </View>
+                ))}
+              </List.Accordion>
+
+              <List.Accordion title="Steam Ironing (Piece Rates)" id="3" left={props => <List.Icon {...props} icon="weather-fog" />}>
+                {Object.keys(currentCatData.pieceRates?.IRON_STEAM || {}).map(piece => (
+                  <View key={piece} style={styles.rateRow}>
+                    <Text style={styles.rateLabel}>{piece}</Text>
+                    <TextInput
+                      value={String(currentCatData.pieceRates.IRON_STEAM[piece])}
+                      onChangeText={(t) => updatePieceRate('IRON_STEAM', piece, t.replace(/[^0-9.]/g, ''))}
+                      mode="outlined"
+                      dense
+                      keyboardType="decimal-pad"
+                      style={styles.rateInput}
+                      left={<TextInput.Affix text="₹" />}
+                    />
+                  </View>
+                ))}
+              </List.Accordion>
             </List.AccordionGroup>
 
             <Button mode="contained" onPress={handleSave} loading={loading} disabled={loading} style={styles.saveBtn} icon="content-save">
@@ -450,77 +234,14 @@ export default function SettingsScreen() {
           </View>
         )}
 
+        {/* Desktop Sync */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Desktop Sync</Text>
+          <SyncStatusBadge onPress={() => setPairingVisible(true)} />
+        </View>
       </ScrollView>
 
-      {/* â”€â”€â”€ Dialogs â”€â”€â”€ */}
-      <Portal>
-        {/* Rename Category Dialog */}
-        <Dialog visible={renameCatVisible} onDismiss={() => setRenameCatVisible(false)}>
-          <Dialog.Title>Rename Category</Dialog.Title>
-          <Dialog.Content>
-            <TextInput
-              label="Category Name"
-              value={renameCatValue}
-              onChangeText={setRenameCatValue}
-              mode="outlined"
-              dense
-              style={{ backgroundColor: appColors.surface }}
-            />
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setRenameCatVisible(false)}>Cancel</Button>
-            <Button onPress={handleRenameCategory}>Rename</Button>
-          </Dialog.Actions>
-        </Dialog>
-
-        {/* Edit Item Name Dialog */}
-        <Dialog visible={editItemDialog.visible} onDismiss={() => setEditItemDialog({ ...editItemDialog, visible: false })}>
-          <Dialog.Title>Rename Item</Dialog.Title>
-          <Dialog.Content>
-            <TextInput
-              label="Item Name"
-              value={editItemDialog.newName}
-              onChangeText={(t) => setEditItemDialog({ ...editItemDialog, newName: t })}
-              mode="outlined"
-              dense
-              style={{ backgroundColor: appColors.surface }}
-            />
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setEditItemDialog({ ...editItemDialog, visible: false })}>Cancel</Button>
-            <Button onPress={handleEditItemName}>Save</Button>
-          </Dialog.Actions>
-        </Dialog>
-
-        {/* Add Item Dialog */}
-        <Dialog visible={addItemDialog.visible} onDismiss={() => setAddItemDialog({ ...addItemDialog, visible: false })}>
-          <Dialog.Title>Add New Item</Dialog.Title>
-          <Dialog.Content>
-            <TextInput
-              label="Item Name"
-              value={addItemDialog.name}
-              onChangeText={(t) => setAddItemDialog({ ...addItemDialog, name: t })}
-              mode="outlined"
-              dense
-              style={{ backgroundColor: appColors.surface, marginBottom: 12 }}
-            />
-            <TextInput
-              label="Rate (â‚¹)"
-              value={addItemDialog.rate}
-              onChangeText={(t) => setAddItemDialog({ ...addItemDialog, rate: t.replace(/[^0-9.]/g, '') })}
-              mode="outlined"
-              dense
-              keyboardType="decimal-pad"
-              style={{ backgroundColor: appColors.surface }}
-              left={<TextInput.Affix text="â‚¹" />}
-            />
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setAddItemDialog({ ...addItemDialog, visible: false })}>Cancel</Button>
-            <Button onPress={handleAddItem}>Add</Button>
-          </Dialog.Actions>
-        </Dialog>
-      </Portal>
+      <PairingModal visible={pairingVisible} onDismiss={() => setPairingVisible(false)} />
 
       <Snackbar
         visible={snackbar.visible}
@@ -543,60 +264,17 @@ const styles = StyleSheet.create({
   headerSubtitle: { fontSize: 13, color: appColors.textSecondary },
   section: { paddingHorizontal: 20, marginTop: 20 },
   sectionTitle: { fontSize: 18, fontWeight: '700', color: appColors.text, marginBottom: 12 },
-  categoryScroll: { flexDirection: 'row', marginBottom: 4 },
+  categoryScroll: { flexDirection: 'row', marginBottom: 10 },
   categoryPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: appColors.surface, marginRight: 8, borderWidth: 1, borderColor: appColors.border },
   categoryPillActive: { backgroundColor: appColors.primary, borderColor: appColors.primary },
   categoryPillText: { color: appColors.text, fontWeight: '600' },
   categoryPillTextActive: { color: '#fff' },
   categoryPillAdd: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: appColors.surfaceVariant, justifyContent: 'center', alignItems: 'center' },
-  categoryActions: {
-    flexDirection: 'row',
-    gap: 16,
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  categoryActionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    backgroundColor: appColors.surfaceVariant,
-  },
-  categoryActionText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: appColors.primary,
-  },
   addCategoryContainer: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
   addCategoryInput: { flex: 1, backgroundColor: appColors.surface },
   addCategoryBtn: { borderRadius: 8 },
-  rateRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: appColors.surfaceVariant,
-  },
-  rateLabel: { flex: 1, fontSize: 13, color: appColors.text, marginRight: 4 },
-  rateInput: { width: 90, backgroundColor: appColors.surface },
-  itemActionBtn: { margin: 0, padding: 0 },
-  addItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderTopWidth: 1,
-    borderTopColor: appColors.surfaceVariant,
-  },
-  addItemText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: appColors.primary,
-  },
+  rateRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderBottomWidth: 1, borderBottomColor: appColors.surfaceVariant },
+  rateLabel: { flex: 1, fontSize: 14, color: appColors.text },
+  rateInput: { width: 100, backgroundColor: appColors.surface },
   saveBtn: { marginTop: 20, borderRadius: 12, paddingVertical: 6 },
 });

@@ -1,4 +1,4 @@
-﻿// BillGenerationScreen â€” Search customer, build multi-service cart, generate bill
+// BillGenerationScreen — Search customer, build multi-service cart, generate bill
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -8,7 +8,6 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { Searchbar, TextInput, Button, Text, RadioButton, Snackbar, SegmentedButtons } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CustomerService, BillService } from '../services/storage';
@@ -23,14 +22,6 @@ import { useWebRTC } from '../services/WebRTCContext';
 
 // Remove IRON_DRY from options here if it exists in SERVICE_TYPES
 const SERVICE_KEYS = Object.keys(SERVICE_TYPES).filter(k => k !== 'IRON_DRY');
-
-// Format a Date object to DD/MM/YYYY string for bill storage
-function formatDueDateForBill(date) {
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-  return `${day}/${month}/${year}`;
-}
 
 export default function BillGenerationScreen() {
   // Customer search
@@ -50,8 +41,6 @@ export default function BillGenerationScreen() {
   const [clothingItems, setClothingItems] = useState([]); // used for kg mode
   const [piecewiseItems, setPiecewiseItems] = useState([]); // used for piece mode
   const [showItemPicker, setShowItemPicker] = useState(false);
-  const [dueDate, setDueDate] = useState(null); // Date object or null
-  const [showDatePicker, setShowDatePicker] = useState(false);
 
   // Cart
   const [cart, setCart] = useState([]);
@@ -74,10 +63,12 @@ export default function BillGenerationScreen() {
 
   // When service type changes, force billing mode if necessary
   useEffect(() => {
-    if (serviceType === 'IRON_STEAM') {
+    if (serviceType === 'WASH_ONLY') {
+      setBillingMode('kg');
+    } else if (serviceType === 'IRON_STEAM') {
       setBillingMode('piece');
     }
-    // For WASH_ONLY and WASH_AND_IRON, it can be either, so we don't force change it
+    // For WASH_AND_IRON, it can be either, so we don't force change it
   }, [serviceType]);
 
   const customerCategory = selectedCustomer?.category || 'Student';
@@ -195,10 +186,8 @@ export default function BillGenerationScreen() {
         totalWeight,
         totalClothesCount,
         totalAmount: Math.round(totalAmount * 100) / 100,
-        dueDate: dueDate ? formatDueDateForBill(dueDate) : undefined,
       });
       setGeneratedBill(bill);
-      // Sync to desktop (non-blocking — queues offline if disconnected)
       try { syncBillToDesktop(bill); } catch (e) {}
       setModalVisible(true);
     } catch (error) {
@@ -220,8 +209,6 @@ export default function BillGenerationScreen() {
     setCart([]);
     setSearchQuery('');
     setShowItemPicker(false);
-    setDueDate(null);
-    setShowDatePicker(false);
   };
 
   return (
@@ -278,7 +265,7 @@ export default function BillGenerationScreen() {
                         <View style={styles.resultInfo}>
                           <Text style={styles.resultName}>{customer.name}</Text>
                           <Text style={styles.resultDetail}>
-                            {customer.mobile} â€¢ {customer.category || 'Student'}
+                            {customer.mobile} • {customer.category || 'Student'}
                           </Text>
                         </View>
                       </TouchableOpacity>
@@ -305,7 +292,7 @@ export default function BillGenerationScreen() {
               <View style={styles.selectedInfo}>
                 <Text style={styles.selectedName}>{selectedCustomer.name}</Text>
                 <Text style={styles.selectedDetail}>
-                  {selectedCustomer.mobile} â€¢ {selectedCustomer.category || 'Student'}
+                  {selectedCustomer.mobile} • {selectedCustomer.category || 'Student'}
                 </Text>
               </View>
               <TouchableOpacity onPress={clearCustomer} style={styles.clearBtn}>
@@ -351,7 +338,7 @@ export default function BillGenerationScreen() {
                         {svc.label}
                       </Text>
                       {key !== 'IRON_STEAM' && (
-                        <Text style={styles.serviceRate}>â‚¹{rate} per kg</Text>
+                        <Text style={styles.serviceRate}>₹{rate} per kg</Text>
                       )}
                     </View>
                   </View>
@@ -373,7 +360,7 @@ export default function BillGenerationScreen() {
             {'  '}Laundry Details
           </Text>
 
-          {(serviceType === 'WASH_AND_IRON' || serviceType === 'WASH_ONLY') && (
+          {serviceType === 'WASH_AND_IRON' && (
             <SegmentedButtons
               value={billingMode}
               onValueChange={setBillingMode}
@@ -440,39 +427,6 @@ export default function BillGenerationScreen() {
               pieceRates={currentPieceRates}
             />
           )}
-
-          {/* Due Date */}
-          <View style={styles.dueDateContainer}>
-            <TouchableOpacity
-              style={styles.datePickerTouchable}
-              onPress={() => setShowDatePicker(true)}
-              activeOpacity={0.7}
-            >
-              <MaterialCommunityIcons name="calendar" size={20} color={appColors.primary} />
-              <Text style={dueDate ? styles.datePickerText : styles.datePickerPlaceholder}>
-                {dueDate ? formatDueDateForBill(dueDate) : 'Select Due Date (Optional)'}
-              </Text>
-              {dueDate && (
-                <TouchableOpacity onPress={() => setDueDate(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <MaterialCommunityIcons name="close-circle" size={20} color={appColors.textLight} />
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-            {showDatePicker && (
-              <DateTimePicker
-                value={dueDate || new Date()}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                minimumDate={new Date()}
-                onChange={(event, selectedDate) => {
-                  setShowDatePicker(Platform.OS === 'ios');
-                  if (event.type !== 'dismissed' && selectedDate) {
-                    setDueDate(selectedDate);
-                  }
-                }}
-              />
-            )}
-          </View>
         </View>
 
         {/* Current Item Preview */}
@@ -480,7 +434,7 @@ export default function BillGenerationScreen() {
           <View style={styles.currentPreview}>
             <View style={styles.previewRow}>
               <Text style={styles.previewLabel}>
-                {SERVICE_TYPES[serviceType]?.label} â€¢ {billingMode === 'kg' ? `${weightNum} kg Ã— â‚¹${currentKgRate}` : `${totalItemsCount} pieces`}
+                {SERVICE_TYPES[serviceType]?.label} • {billingMode === 'kg' ? `${weightNum} kg × ₹${currentKgRate}` : `${totalItemsCount} pieces`}
               </Text>
               <Text style={styles.previewValue}>{formatCurrency(currentSubtotal)}</Text>
             </View>
@@ -777,9 +731,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: appColors.border,
   },
-  dueDateContainer: {
-    marginTop: 12,
-  },
   currentPreview: {
     marginHorizontal: 20,
     marginTop: 16,
@@ -878,26 +829,5 @@ const styles = StyleSheet.create({
   },
   snackbar: {
     backgroundColor: appColors.error,
-  },
-  datePickerTouchable: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: appColors.surface,
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: appColors.border,
-    gap: 10,
-  },
-  datePickerText: {
-    flex: 1,
-    fontSize: 14,
-    color: appColors.text,
-    fontWeight: '500',
-  },
-  datePickerPlaceholder: {
-    flex: 1,
-    fontSize: 14,
-    color: appColors.textLight,
   },
 });
