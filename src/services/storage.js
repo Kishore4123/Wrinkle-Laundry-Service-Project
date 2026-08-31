@@ -142,16 +142,16 @@ export const BillService = {
   async save(billData) {
     const bills = await this.getAll();
 
-    // Generate Sequential ID: WLS-YYMMDD-XXX
+    // Generate Sequential ID: WR-YYMMDD-XXX
     const today = new Date();
     const yy = String(today.getFullYear()).slice(-2);
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const dd = String(today.getDate()).padStart(2, '0');
     const datePrefix = `${yy}${mm}${dd}`;
-    
+
     let maxSeq = 0;
-    const prefixStr = `WLS-${datePrefix}-`;
-    
+    const prefixStr = `WR-${datePrefix}-`;
+
     bills.forEach(b => {
       if (b.id && b.id.startsWith(prefixStr)) {
         const seqStr = b.id.replace(prefixStr, '');
@@ -163,7 +163,7 @@ export const BillService = {
     });
 
     const newSeq = maxSeq + 1;
-    const newBillId = `WLS-${datePrefix}-${String(newSeq).padStart(3, '0')}`;
+    const newBillId = `WR-${datePrefix}-${String(newSeq).padStart(3, '0')}`;
 
     const newBill = {
       id: newBillId,

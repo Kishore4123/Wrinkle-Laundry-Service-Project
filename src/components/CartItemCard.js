@@ -53,17 +53,28 @@ export default function CartItemCard({ cartItem, index, onDelete }) {
       </View>
 
       {cartItem.items && cartItem.items.length > 0 && (
-        <View style={styles.itemsList}>
+        <View style={styles.tableContainer}>
+          <View style={styles.tableHeader}>
+            <Text style={[styles.tableHeaderText, { flex: 2 }]}>Item</Text>
+            <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'center' }]}>Price</Text>
+            <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'center' }]}>Qty</Text>
+            <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'right' }]}>Total</Text>
+          </View>
           {cartItem.items.map((item, idx) => (
-            <Chip
-              key={idx}
-              compact
-              mode="flat"
-              style={styles.itemChip}
-              textStyle={styles.itemChipText}
-            >
-              {item.count}× {item.label || item.category} {cartItem.isPiecewise ? `(₹${item.rate}/pc)` : ''}
-            </Chip>
+            <View key={idx} style={styles.tableRow}>
+              <Text style={[styles.tableRowText, { flex: 2 }]} numberOfLines={1}>
+                {item.label || item.category}
+              </Text>
+              <Text style={[styles.tableRowText, { flex: 1, textAlign: 'center' }]}>
+                {cartItem.isPiecewise ? `₹${item.rate}` : '-'}
+              </Text>
+              <Text style={[styles.tableRowText, { flex: 1, textAlign: 'center' }]}>
+                {item.count}
+              </Text>
+              <Text style={[styles.tableRowText, { flex: 1, textAlign: 'right', fontWeight: '600' }]}>
+                {cartItem.isPiecewise ? `₹${item.count * item.rate}` : '-'}
+              </Text>
+            </View>
           ))}
         </View>
       )}
@@ -138,22 +149,32 @@ const styles = StyleSheet.create({
     color: appColors.primary,
     marginLeft: 'auto',
   },
-  itemsList: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
+  tableContainer: {
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: 1,
     borderTopColor: appColors.border,
   },
-  itemChip: {
-    backgroundColor: appColors.surface,
-    height: 26,
+  tableHeader: {
+    flexDirection: 'row',
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: appColors.border,
+    marginBottom: 6,
   },
-  itemChipText: {
+  tableHeaderText: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '700',
     color: appColors.textSecondary,
+    textTransform: 'uppercase',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    paddingVertical: 4,
+    alignItems: 'center',
+  },
+  tableRowText: {
+    fontSize: 12,
+    color: appColors.text,
   },
 });

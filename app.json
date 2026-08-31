@@ -1,4 +1,4 @@
-{
+﻿{
   "expo": {
     "name": "Wrinkle Laundry Service",
     "slug": "wrinkle-laundry-service",
@@ -36,7 +36,9 @@
         {
           "cameraPermission": "Allow Wrinkle Laundry Service to access your camera to scan QR codes."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker",
+      "@config-plugins/react-native-webrtc"
     ],
     "extra": {
       "eas": {

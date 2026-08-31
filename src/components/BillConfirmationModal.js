@@ -51,6 +51,9 @@ export default function BillConfirmationModal({ visible, bill, onDismiss }) {
             <SummaryRow label="Customer" value={customerName} />
             <SummaryRow label="Type" value={customerCategory} />
             <SummaryRow label="Date" value={formatDate(bill.createdAt)} />
+            {bill.dueDate && (
+              <SummaryRow label="Due Date" value={bill.dueDate} bold />
+            )}
 
             {hasCart ? (
               <>
@@ -75,11 +78,28 @@ export default function BillConfirmationModal({ visible, bill, onDismiss }) {
                       <SummaryRow label="Subtotal" value={formatCurrency(cartItem.subtotal)} bold />
 
                       {cartItem.items && cartItem.items.length > 0 && (
-                        <View style={styles.itemChips}>
+                        <View style={styles.tableContainer}>
+                          <View style={styles.tableHeader}>
+                            <Text style={[styles.tableHeaderText, { flex: 2 }]}>Item</Text>
+                            <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'center' }]}>Price</Text>
+                            <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'center' }]}>Qty</Text>
+                            <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'right' }]}>Total</Text>
+                          </View>
                           {cartItem.items.map((item, iIdx) => (
-                            <Chip key={iIdx} compact mode="flat" style={styles.chip} textStyle={styles.chipText}>
-                              {item.count}× {item.label || item.category}
-                            </Chip>
+                            <View key={iIdx} style={styles.tableRow}>
+                              <Text style={[styles.tableRowText, { flex: 2 }]} numberOfLines={1}>
+                                {item.label || item.category}
+                              </Text>
+                              <Text style={[styles.tableRowText, { flex: 1, textAlign: 'center' }]}>
+                                {cartItem.isPiecewise ? `₹${item.rate}` : '-'}
+                              </Text>
+                              <Text style={[styles.tableRowText, { flex: 1, textAlign: 'center' }]}>
+                                {item.count}
+                              </Text>
+                              <Text style={[styles.tableRowText, { flex: 1, textAlign: 'right', fontWeight: '600' }]}>
+                                {cartItem.isPiecewise ? `₹${item.count * item.rate}` : '-'}
+                              </Text>
+                            </View>
                           ))}
                         </View>
                       )}
@@ -239,20 +259,33 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: appColors.text,
   },
-  itemChips: {
+  tableContainer: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: appColors.border,
+  },
+  tableHeader: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-    marginTop: 6,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: appColors.border,
+    marginBottom: 6,
   },
-  chip: {
-    backgroundColor: appColors.surface,
-    height: 24,
-  },
-  chipText: {
-    fontSize: 10,
-    fontWeight: '600',
+  tableHeaderText: {
+    fontSize: 11,
+    fontWeight: '700',
     color: appColors.textSecondary,
+    textTransform: 'uppercase',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    paddingVertical: 4,
+    alignItems: 'center',
+  },
+  tableRowText: {
+    fontSize: 12,
+    color: appColors.text,
   },
   totalRow: {
     flexDirection: 'row',

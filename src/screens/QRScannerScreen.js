@@ -21,10 +21,16 @@ export default function QRScannerScreen() {
 
   const handleBarCodeScanned = async ({ type, data }) => {
     setScanned(true);
-    
-    // Check if it's a valid Bill ID format or just search
-    if (data.startsWith('BILL-')) {
-      const bill = await BillService.getById(data);
+
+    // Extract ID if it's a full URL
+    let scannedId = data;
+    if (data.includes('data=')) {
+      scannedId = data.split('data=')[1].split('&')[0];
+    }
+
+    // Check if it's a valid Bill ID format
+    if (scannedId.startsWith('BILL-') || scannedId.startsWith('WR-')) {
+      const bill = await BillService.getById(scannedId);
       if (bill) {
         navigation.navigate('History', { scannedBillId: bill.id });
         // Allow scanning again after a short delay
@@ -66,7 +72,7 @@ export default function QRScannerScreen() {
           barcodeTypes: ["qr"],
         }}
       />
-      
+
       {/* Scanner Overlay UI */}
       <View style={styles.overlay}>
         <View style={styles.scanArea} />

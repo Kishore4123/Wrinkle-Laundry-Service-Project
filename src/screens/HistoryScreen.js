@@ -1,14 +1,42 @@
 // HistoryScreen — Chronological list of all generated bills with search and payment
 import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, FlatList, ScrollView } from 'react-native';
-import { Searchbar, Text, Modal, Portal, Button, Chip } from 'react-native-paper';
+import { View, StyleSheet, FlatList, ScrollView, Linking, Alert, TouchableOpacity, Platform } from 'react-native';
+import { Searchbar, Text, Modal, Portal, Button, Chip, TextInput } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { BillService } from '../services/storage';
 import BillCard from '../components/BillCard';
 import EmptyState from '../components/EmptyState';
 import { appColors, SERVICE_TYPES } from '../theme/theme';
-import { formatDate, formatCurrency } from '../utils/helpers';
+import { formatDate, formatCurrency, buildWhatsAppUrl, buildOrderReadyMessage } from '../utils/helpers';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+
+// Format a Date object to DD/MM/YYYY string
+function formatDateDDMMYYYY(date) {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+// Get today's date string in DD/MM/YYYY
+function getTodayString() {
+  return formatDateDDMMYYYY(new Date());
+}
+
+// Parse a dueDate string (DD/MM/YYYY) to a Date object for sorting
+function parseDueDate(dueDateStr) {
+  if (!dueDateStr) return null;
+  const parts = dueDateStr.split('/');
+  if (parts.length === 3) {
+    const day = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const year = parseInt(parts[2], 10);
+    const d = new Date(year, month, day);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return null;
+}
 
 export default function HistoryScreen({ route, navigation }) {
   const [bills, setBills] = useState([]);
@@ -16,6 +44,9 @@ export default function HistoryScreen({ route, navigation }) {
   const [loading, setLoading] = useState(false);
   const [selectedBill, setSelectedBill] = useState(null);
   const [paymentModalVisible, setPaymentModalVisible] = useState(false);
+  const [doneModalVisible, setDoneModalVisible] = useState(false);
+  const [deliveryDate, setDeliveryDate] = useState(null); // Date object or null
+  const [showDeliveryDatePicker, setShowDeliveryDatePicker] = useState(false);
 
   // Watch for scanned bill
   useFocusEffect(
@@ -25,7 +56,6 @@ export default function HistoryScreen({ route, navigation }) {
         if (found) {
           setSelectedBill(found);
           setPaymentModalVisible(true);
-          // Clear the param so it doesn't re-trigger on subsequent focuses
           navigation.setParams({ scannedBillId: undefined });
         }
       }
@@ -55,9 +85,31 @@ export default function HistoryScreen({ route, navigation }) {
     }
   };
 
-  // Calculate summary stats
   const totalRevenue = bills.reduce((sum, b) => sum + b.totalAmount, 0);
   const totalOrders = bills.length;
+
+  // Delivery Today count — bills whose dueDate matches today
+  const todayStr = getTodayString();
+  const deliveryTodayCount = bills.filter(b => b.dueDate === todayStr).length;
+
+  // Sort bills by dueDate (upcoming first), then by createdAt
+  const sortedBills = [...bills].sort((a, b) => {
+    const dateA = parseDueDate(a.dueDate);
+    const dateB = parseDueDate(b.dueDate);
+
+    // Bills with dueDate come before those without
+    if (dateA && !dateB) return -1;
+    if (!dateA && dateB) return 1;
+
+    // Both have dueDates — sort ascending (soonest first)
+    if (dateA && dateB) {
+      const diff = dateA.getTime() - dateB.getTime();
+      if (diff !== 0) return diff;
+    }
+
+    // Fallback: sort by createdAt descending (newest first)
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
 
   const handlePaymentDone = async () => {
     if (selectedBill) {
@@ -65,6 +117,37 @@ export default function HistoryScreen({ route, navigation }) {
       setPaymentModalVisible(false);
       setSelectedBill(null);
       loadBills();
+    }
+  };
+
+  const handleOrderDone = () => {
+    setPaymentModalVisible(false);
+    setDeliveryDate(null);
+    setShowDeliveryDatePicker(false);
+    setDoneModalVisible(true);
+  };
+
+  const handleConfirmDone = async () => {
+    if (selectedBill) {
+      const mobile = selectedBill.mobile || '';
+      const dateStr = deliveryDate ? formatDateDDMMYYYY(deliveryDate) : '';
+      const message = buildOrderReadyMessage(selectedBill, dateStr);
+      try {
+        const url = buildWhatsAppUrl(mobile, message);
+        const canOpen = await Linking.canOpenURL(url);
+        if (canOpen) {
+          await Linking.openURL(url);
+        } else {
+          const webUrl = `https://wa.me/91${mobile}?text=${encodeURIComponent(message)}`;
+          await Linking.openURL(webUrl);
+        }
+      } catch (error) {
+        Alert.alert('Error', 'Could not open WhatsApp. Make sure it is installed.');
+      }
+      setDoneModalVisible(false);
+      setDeliveryDate(null);
+      setShowDeliveryDatePicker(false);
+      setSelectedBill(null);
     }
   };
 
@@ -99,6 +182,10 @@ export default function HistoryScreen({ route, navigation }) {
             </Text>
             <Text style={styles.statLabel}>Total Revenue</Text>
           </View>
+          <View style={[styles.statCard, { backgroundColor: '#FEF3C7' }]}>
+            <Text style={[styles.statValue, { color: '#D97706' }]}>{deliveryTodayCount}</Text>
+            <Text style={styles.statLabel}>Delivery Today</Text>
+          </View>
         </View>
       )}
 
@@ -114,9 +201,9 @@ export default function HistoryScreen({ route, navigation }) {
         />
       </View>
 
-      {/* List */}
+      {/* List — sorted by dueDate */}
       <FlatList
-        data={bills}
+        data={sortedBills}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         contentContainerStyle={bills.length === 0 ? styles.emptyContainer : styles.listContent}
@@ -150,7 +237,6 @@ export default function HistoryScreen({ route, navigation }) {
               <View style={styles.summaryCard}>
                 <SummaryRow label="Customer" value={selectedBill.customerName || selectedBill.studentName} />
 
-                {/* Cart items display */}
                 {selectedBill.cartItems && selectedBill.cartItems.length > 0 ? (
                   <>
                     {selectedBill.cartItems.map((cartItem, idx) => {
@@ -200,6 +286,18 @@ export default function HistoryScreen({ route, navigation }) {
                 Payment Done
               </Button>
               <Button
+                mode="contained"
+                onPress={handleOrderDone}
+                style={styles.doneButton}
+                contentStyle={styles.payButtonContent}
+                buttonColor="#10B981"
+                icon={({ size, color }) => (
+                  <MaterialCommunityIcons name="check-circle" size={size} color={color} />
+                )}
+              >
+                Done — Notify Customer
+              </Button>
+              <Button
                 mode="outlined"
                 onPress={() => setPaymentModalVisible(false)}
                 style={styles.cancelButton}
@@ -208,6 +306,83 @@ export default function HistoryScreen({ route, navigation }) {
               </Button>
             </ScrollView>
           )}
+        </Modal>
+      </Portal>
+
+      {/* Delivery Date Modal */}
+      <Portal>
+        <Modal
+          visible={doneModalVisible}
+          onDismiss={() => setDoneModalVisible(false)}
+          contentContainerStyle={styles.modal}
+        >
+          <View style={styles.modalScroll}>
+            <View style={[styles.iconCircle, { backgroundColor: '#10B981' }]}>
+              <MaterialCommunityIcons name="truck-delivery" size={32} color="#FFFFFF" />
+            </View>
+            <Text style={styles.modalTitle}>Order Ready 🎉</Text>
+            <Text style={[styles.billId, { marginBottom: 8 }]}>
+              {selectedBill?.id}
+            </Text>
+            <Text style={{ fontSize: 13, color: appColors.textSecondary, textAlign: 'center', marginBottom: 20 }}>
+              Select a delivery date to notify{' '}
+              <Text style={{ fontWeight: '700', color: appColors.text }}>
+                {selectedBill?.customerName || selectedBill?.studentName}
+              </Text>{' '}
+              via WhatsApp.
+            </Text>
+
+            {/* Calendar Date Picker */}
+            <TouchableOpacity
+              style={styles.datePickerTouchable}
+              onPress={() => setShowDeliveryDatePicker(true)}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons name="calendar" size={20} color={appColors.primary} />
+              <Text style={deliveryDate ? styles.datePickerText : styles.datePickerPlaceholder}>
+                {deliveryDate ? formatDateDDMMYYYY(deliveryDate) : 'Select Delivery Date'}
+              </Text>
+              {deliveryDate && (
+                <TouchableOpacity onPress={() => setDeliveryDate(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <MaterialCommunityIcons name="close-circle" size={20} color={appColors.textLight} />
+                </TouchableOpacity>
+              )}
+            </TouchableOpacity>
+            {showDeliveryDatePicker && (
+              <DateTimePicker
+                value={deliveryDate || new Date()}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                minimumDate={new Date()}
+                onChange={(event, selectedDate) => {
+                  setShowDeliveryDatePicker(Platform.OS === 'ios');
+                  if (event.type !== 'dismissed' && selectedDate) {
+                    setDeliveryDate(selectedDate);
+                  }
+                }}
+              />
+            )}
+
+            <Button
+              mode="contained"
+              onPress={handleConfirmDone}
+              style={[styles.payButton, { marginTop: 20 }]}
+              contentStyle={styles.payButtonContent}
+              buttonColor="#25D366"
+              icon={({ size, color }) => (
+                <MaterialCommunityIcons name="whatsapp" size={size} color={color} />
+              )}
+            >
+              Send via WhatsApp
+            </Button>
+            <Button
+              mode="outlined"
+              onPress={() => setDoneModalVisible(false)}
+              style={styles.cancelButton}
+            >
+              Cancel
+            </Button>
+          </View>
         </Modal>
       </Portal>
     </View>
@@ -247,23 +422,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingHorizontal: 16,
     paddingTop: 16,
-    gap: 12,
+    gap: 8,
   },
   statCard: {
     flex: 1,
     borderRadius: 16,
-    padding: 16,
+    padding: 14,
     alignItems: 'center',
   },
   statValue: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: '800',
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: appColors.textSecondary,
     marginTop: 4,
     fontWeight: '500',
+    textAlign: 'center',
   },
   searchContainer: {
     paddingHorizontal: 16,
@@ -401,9 +577,36 @@ const styles = StyleSheet.create({
   payButtonContent: {
     height: 48,
   },
+  doneButton: {
+    width: '100%',
+    borderRadius: 14,
+    marginBottom: 10,
+  },
   cancelButton: {
     width: '100%',
     borderRadius: 14,
     borderColor: appColors.border,
+  },
+  datePickerTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    backgroundColor: appColors.surfaceVariant,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: appColors.border,
+    gap: 10,
+  },
+  datePickerText: {
+    flex: 1,
+    fontSize: 14,
+    color: appColors.text,
+    fontWeight: '500',
+  },
+  datePickerPlaceholder: {
+    flex: 1,
+    fontSize: 14,
+    color: appColors.textLight,
   },
 });

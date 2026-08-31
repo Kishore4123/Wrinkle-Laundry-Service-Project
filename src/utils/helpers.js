@@ -15,11 +15,11 @@ export function generateId() {
 }
 
 /**
- * Format a bill ID: WLS-YYMMDD-XXX
+ * Format a bill ID: WR-YYMMDD-XXX
  */
 export function formatBillId(dateStr, sequence) {
   const seqStr = String(sequence).padStart(3, '0');
-  return `WLS-${dateStr}-${seqStr}`;
+  return `WR-${dateStr}-${seqStr}`;
 }
 
 /**
@@ -67,6 +67,41 @@ export function buildWhatsAppUrl(mobile, message) {
 }
 
 /**
+ * Build a mobile-friendly monospace item table for WhatsApp.
+ * Two-line layout per item: name on line 1, price/qty/total on line 2.
+ * Wrapped in triple backticks for monospace rendering.
+ * Uses padEnd/padStart for strict column alignment.
+ * @param {Array} items - Array of {label/category, rate, count}
+ * @param {boolean} isPiecewise - Whether to show price/total or dashes
+ */
+function buildItemTable(items, isPiecewise) {
+  const COL_PRICE = 13;
+  const COL_QTY = 9;
+
+  const divider = '-'.repeat(30);
+  const header = 'Item - Name';
+  const subHeader = 'Price'.padEnd(COL_PRICE) + 'Qty'.padEnd(COL_QTY) + 'Total';
+
+  let rows = '';
+  items.forEach((i, idx) => {
+    const name = i.label || i.category || '';
+    const price = isPiecewise ? ('\u20b9' + i.rate).padEnd(COL_PRICE) : '-'.padEnd(COL_PRICE);
+    const qty = ('x ' + i.count).padEnd(COL_QTY);
+    const total = isPiecewise ? '\u20b9' + (i.count * i.rate) : '-';
+    const spacer = idx > 0 ? '\n' : '';
+    rows += `${spacer}\n${name}\n${price}${qty}${total.padStart(7)}`;
+  });
+
+  return '```text\n' +
+    divider + '\n' +
+    header + '\n' +
+    divider + '\n' +
+    subHeader + '\n' +
+    divider +
+    rows + '\n```';
+}
+
+/**
  * Build the bill receipt message for WhatsApp
  * Supports new cart-based bills and legacy single-service bills
  */
@@ -74,27 +109,30 @@ export function buildBillMessage(bill) {
   const customerName = bill.customerName || bill.studentName || 'Customer';
   const customerCategory = bill.customerCategory || 'Student';
 
+  // Build centered bold bill number header
+  const billIdStr = `*Bill No: ${bill.id}*`;
+  const centeredBillId = billIdStr.padStart(38 + Math.floor(billIdStr.length / 2));
+
   let itemsSection = '';
 
   if (bill.cartItems && bill.cartItems.length > 0) {
     // New cart-based bill
     bill.cartItems.forEach((cartItem, idx) => {
       const serviceLabel = SERVICE_TYPES[cartItem.serviceType]?.label || cartItem.serviceType;
-      itemsSection += `\n🔹 *Service ${idx + 1}: ${serviceLabel}*`;
+      // Split service label for "Wash &\nIron" style line break if it contains "&"
+      const formattedLabel = serviceLabel.replace(/ & /g, ' &\n');
+      itemsSection += `\n🔹 Service ${idx + 1}: ${formattedLabel}`;
+      itemsSection += '\n';
       if (cartItem.isPiecewise) {
-        itemsSection += `\n   👕 Items:`;
         if (cartItem.items && cartItem.items.length > 0) {
-          cartItem.items.forEach(i => {
-            itemsSection += `\n      - ${i.count}× ${i.label || i.category} @ ₹${i.rate}/pc = ₹${i.count * i.rate}`;
-          });
+          itemsSection += '\n' + buildItemTable(cartItem.items, true);
         }
       } else {
         itemsSection += `\n   ⚖️ Weight: ${cartItem.weight} kg`;
-        if (cartItem.items && cartItem.items.length > 0) {
-          const itemsList = cartItem.items.map((i) => `${i.count}× ${i.label || i.category}`).join(', ');
-          itemsSection += `\n   👕 Items: ${itemsList}`;
-        }
         itemsSection += `\n   💰 Rate: ₹${cartItem.ratePerKg}/kg`;
+        if (cartItem.items && cartItem.items.length > 0) {
+          itemsSection += '\n' + buildItemTable(cartItem.items, false);
+        }
       }
       itemsSection += `\n   📋 Subtotal: ₹${cartItem.subtotal}`;
       itemsSection += '\n';
@@ -111,21 +149,31 @@ export function buildBillMessage(bill) {
 💰 *Rate:* ₹${bill.ratePerKg}/kg`;
   }
 
-  return `Wrinkle Release Laundry Service, Near Covai Residency, Madhvarayapuram, Siruvani Road, Coimbatore. Phone no. : +91 96007 63725
-  
-*🧺 Laundry Bill Receipt*
-*Bill No:* ${bill.id}
+  const dueDateSection = bill.dueDate ? `\n📅 *Due:* ${bill.dueDate}` : '';
+
+  return `${centeredBillId}
+ 
+Wrinkle Release Laundry Service
+Near Covai Residency,
+Madhvarayapuram,
+Coimbatore.
+📞 +91 96007 63725
+🧺 Laundry Bill Receipt
 ━━━━━━━━━━━━━━━━━━━━
-👤 *Customer:* ${customerName}
-🏷️ *Type:* ${customerCategory}
-📅 *Date:* ${formatDate(bill.createdAt)}
+👤 Customer: ${customerName}
+📅 Date: ${formatDate(bill.createdAt)}${dueDateSection}
 ━━━━━━━━━━━━━━━━━━━━${itemsSection}
 ━━━━━━━━━━━━━━━━━━━━
-*💵 Total Amount: ₹${bill.totalAmount}*
+💵 Total Amount: ₹${bill.totalAmount}
 ━━━━━━━━━━━━━━━━━━━━
-Thank you for using Wrinkle Laundry Service! 🙏
+Thank you for using Wrinkle Release Laundry Service! 🙏
 
-📌 *Scan this QR Code for your bill details:*
+Terms & Conditions:
+We are not responsible for color bleeding or shrinkage.
+Please check your garments before handing them over.
+Not responsible for items left over 30 days.
+
+📌 Scan this QR Code for your bill details:
 https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${bill.id}`;
 }
 
@@ -142,4 +190,25 @@ export function isValidMobile(mobile) {
 export function getTotalItemsCount(items) {
   if (!items || items.length === 0) return 0;
   return items.reduce((sum, item) => sum + (item.count || 0), 0);
+}
+
+/**
+ * Build the "Order Ready" WhatsApp notification message
+ * @param {object} bill - The bill object
+ * @param {string} deliveryDate - The chosen delivery date string
+ */
+export function buildOrderReadyMessage(bill, deliveryDate) {
+  const customerName = bill.customerName || bill.studentName || 'Customer';
+  const deliveryDateLine = deliveryDate ? `\n📅 *Delivery Date:* ${deliveryDate}\n` : '';
+  return `*Wrinkle Release Laundry Service* 🧺✨
+
+Dear *${customerName}*,
+
+Your laundry order *${bill.id}* is now ready for delivery! 🎉
+${deliveryDateLine}
+Please collect your garments at your earliest convenience.
+
+Thank you for choosing *Wrinkle Release Laundry Service*! 🙏
+
+📞 +91 96007 63725`;
 }
