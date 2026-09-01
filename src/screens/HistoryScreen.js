@@ -1,7 +1,7 @@
-// HistoryScreen — Chronological list of all generated bills with search and payment
+// HistoryScreen — Tabbed view: Current Bills & Completed History with batch sync
 import React, { useState, useCallback } from 'react';
-import { View, StyleSheet, FlatList, ScrollView, Linking, Alert, TouchableOpacity, Platform } from 'react-native';
-import { Searchbar, Text, Modal, Portal, Button, Chip, TextInput } from 'react-native-paper';
+import { View, StyleSheet, FlatList, ScrollView, Linking, Alert, TouchableOpacity, Platform, ActivityIndicator } from 'react-native';
+import { Searchbar, Text, Modal, Portal, Button, SegmentedButtons } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { BillService } from '../services/storage';
@@ -10,6 +10,7 @@ import EmptyState from '../components/EmptyState';
 import { appColors, SERVICE_TYPES } from '../theme/theme';
 import { formatDate, formatCurrency, buildWhatsAppUrl, buildOrderReadyMessage } from '../utils/helpers';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useWebRTC } from '../services/WebRTCContext';
 
 // Format a Date object to DD/MM/YYYY string
 function formatDateDDMMYYYY(date) {
@@ -39,27 +40,32 @@ function parseDueDate(dueDateStr) {
 }
 
 export default function HistoryScreen({ route, navigation }) {
-  const [bills, setBills] = useState([]);
+  const [activeTab, setActiveTab] = useState('current');
+  const [currentBills, setCurrentBills] = useState([]);
+  const [completedBills, setCompletedBills] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [selectedBill, setSelectedBill] = useState(null);
   const [paymentModalVisible, setPaymentModalVisible] = useState(false);
   const [doneModalVisible, setDoneModalVisible] = useState(false);
-  const [deliveryDate, setDeliveryDate] = useState(null); // Date object or null
+  const [deliveryDate, setDeliveryDate] = useState(null);
   const [showDeliveryDatePicker, setShowDeliveryDatePicker] = useState(false);
+
+  const { syncBill, isConnected } = useWebRTC();
 
   // Watch for scanned bill
   useFocusEffect(
     useCallback(() => {
-      if (route.params?.scannedBillId && bills.length > 0) {
-        const found = bills.find(b => b.id === route.params.scannedBillId);
+      if (route.params?.scannedBillId && currentBills.length > 0) {
+        const found = currentBills.find(b => b.id === route.params.scannedBillId);
         if (found) {
           setSelectedBill(found);
           setPaymentModalVisible(true);
           navigation.setParams({ scannedBillId: undefined });
         }
       }
-    }, [route.params?.scannedBillId, bills])
+    }, [route.params?.scannedBillId, currentBills])
   );
 
   useFocusEffect(
@@ -70,8 +76,12 @@ export default function HistoryScreen({ route, navigation }) {
 
   const loadBills = async () => {
     setLoading(true);
-    const data = await BillService.getAll();
-    setBills(data);
+    const [current, completed] = await Promise.all([
+      BillService.getCurrentBills(),
+      BillService.getCompletedBills(),
+    ]);
+    setCurrentBills(current);
+    setCompletedBills(completed);
     setLoading(false);
   };
 
@@ -81,39 +91,48 @@ export default function HistoryScreen({ route, navigation }) {
       loadBills();
     } else {
       const results = await BillService.search(query);
-      setBills(results);
+      setCurrentBills(results.filter(b => b.status !== 'Completed'));
+      setCompletedBills(results.filter(b => b.status === 'Completed'));
     }
   };
 
-  const totalRevenue = bills.reduce((sum, b) => sum + b.totalAmount, 0);
-  const totalOrders = bills.length;
+  // Active bills data
+  const activeBills = activeTab === 'current' ? currentBills : completedBills;
 
-  // Delivery Today count — bills whose dueDate matches today
+  // Stats for current tab
+  const totalRevenue = activeBills.reduce((sum, b) => sum + b.totalAmount, 0);
+  const totalOrders = activeBills.length;
+
+  // Delivery Today count — only relevant for current bills
   const todayStr = getTodayString();
-  const deliveryTodayCount = bills.filter(b => b.dueDate === todayStr).length;
+  const deliveryTodayCount = currentBills.filter(b => b.dueDate === todayStr).length;
 
-  // Sort bills by dueDate (upcoming first), then by createdAt
-  const sortedBills = [...bills].sort((a, b) => {
+  // Sort current bills by dueDate (upcoming first)
+  const sortedCurrentBills = [...currentBills].sort((a, b) => {
     const dateA = parseDueDate(a.dueDate);
     const dateB = parseDueDate(b.dueDate);
-
-    // Bills with dueDate come before those without
     if (dateA && !dateB) return -1;
     if (!dateA && dateB) return 1;
-
-    // Both have dueDates — sort ascending (soonest first)
     if (dateA && dateB) {
       const diff = dateA.getTime() - dateB.getTime();
       if (diff !== 0) return diff;
     }
-
-    // Fallback: sort by createdAt descending (newest first)
     return (b.createdAt || 0) - (a.createdAt || 0);
   });
 
+  // Sort completed bills by completedAt (newest first)
+  const sortedCompletedBills = [...completedBills].sort((a, b) => {
+    const dateA = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+    const dateB = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+    return dateB - dateA;
+  });
+
+  const displayBills = activeTab === 'current' ? sortedCurrentBills : sortedCompletedBills;
+
+  // ── Payment / Done Handlers ──────────────────────────────
   const handlePaymentDone = async () => {
     if (selectedBill) {
-      await BillService.markPaymentDone(selectedBill.id);
+      await BillService.markBillAsCompleted(selectedBill.id);
       setPaymentModalVisible(false);
       setSelectedBill(null);
       loadBills();
@@ -151,42 +170,164 @@ export default function HistoryScreen({ route, navigation }) {
     }
   };
 
-  const renderItem = ({ item }) => (
-    <BillCard 
-      bill={item} 
-      onPress={() => {
-        setSelectedBill(item);
-        setPaymentModalVisible(true);
-      }} 
-    />
-  );
+  // ── Batch Sync Handler ───────────────────────────────────
+  const handleBatchSync = async () => {
+    if (!isConnected) {
+      Alert.alert(
+        'Not Connected',
+        'Please connect to the Desktop Command Center first.\n\nGo to Settings → Desktop Sync to pair.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    const billsToSync = activeTab === 'current' ? currentBills : completedBills;
+    if (billsToSync.length === 0) {
+      Alert.alert('Nothing to Sync', 'No bills to send to the Desktop.');
+      return;
+    }
+
+    setSyncing(true);
+    let successCount = 0;
+    for (const bill of billsToSync) {
+      try {
+        syncBill(bill);
+        successCount++;
+      } catch (e) {
+        console.warn('[Sync] Failed to sync bill:', bill.id, e);
+      }
+    }
+    setSyncing(false);
+
+    Alert.alert(
+      'Sync Complete ✅',
+      `Successfully sent ${successCount} ${activeTab === 'current' ? 'current' : 'completed'} bill${successCount !== 1 ? 's' : ''} to Desktop Command Center.`,
+      [{ text: 'OK' }]
+    );
+  };
+
+  // ── Single Bill Sync (for completed history) ─────────────
+  const handleSingleSync = (bill) => {
+    if (!isConnected) {
+      Alert.alert('Not Connected', 'Please connect to the Desktop Command Center first.\n\nGo to Settings → Desktop Sync to pair.');
+      return;
+    }
+    try {
+      syncBill(bill);
+      Alert.alert('Synced ✅', `Bill ${bill.id} sent to Desktop.`);
+    } catch (e) {
+      Alert.alert('Sync Failed', 'Could not send this bill. Please try again.');
+    }
+  };
+
+  // ── Render ───────────────────────────────────────────────
+  const renderItem = ({ item }) => {
+    if (activeTab === 'current') {
+      return (
+        <BillCard
+          bill={item}
+          variant="current"
+          onPress={() => {
+            setSelectedBill(item);
+            setPaymentModalVisible(true);
+          }}
+        />
+      );
+    }
+    return (
+      <BillCard
+        bill={item}
+        variant="completed"
+        onPress={() => {
+          setSelectedBill(item);
+          setPaymentModalVisible(true);
+        }}
+        onSyncPress={handleSingleSync}
+      />
+    );
+  };
 
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>History</Text>
-        <Text style={styles.headerSubtitle}>All generated bills</Text>
+        <Text style={styles.headerSubtitle}>
+          {activeTab === 'current' ? 'Active & pending bills' : 'Completed & paid bills'}
+        </Text>
+      </View>
+
+      {/* Tab Switcher */}
+      <View style={styles.tabContainer}>
+        <SegmentedButtons
+          value={activeTab}
+          onValueChange={setActiveTab}
+          buttons={[
+            {
+              value: 'current',
+              label: `Current (${currentBills.length})`,
+              icon: 'clipboard-text-clock-outline',
+            },
+            {
+              value: 'completed',
+              label: `Completed (${completedBills.length})`,
+              icon: 'clipboard-check-outline',
+            },
+          ]}
+          style={styles.segmentedButtons}
+        />
       </View>
 
       {/* Stats Cards */}
       {totalOrders > 0 && (
         <View style={styles.statsRow}>
-          <View style={[styles.statCard, { backgroundColor: '#EEF2FF' }]}>
-            <Text style={[styles.statValue, { color: appColors.primary }]}>{totalOrders}</Text>
-            <Text style={styles.statLabel}>Total Bills</Text>
+          <View style={[styles.statCard, { backgroundColor: activeTab === 'current' ? '#EEF2FF' : '#D1FAE5' }]}>
+            <Text style={[styles.statValue, { color: activeTab === 'current' ? appColors.primary : '#10B981' }]}>
+              {totalOrders}
+            </Text>
+            <Text style={styles.statLabel}>{activeTab === 'current' ? 'Active Bills' : 'Completed'}</Text>
           </View>
           <View style={[styles.statCard, { backgroundColor: '#CCFBF1' }]}>
             <Text style={[styles.statValue, { color: appColors.secondary }]}>
               {formatCurrency(totalRevenue)}
             </Text>
-            <Text style={styles.statLabel}>Total Revenue</Text>
+            <Text style={styles.statLabel}>{activeTab === 'current' ? 'Pending' : 'Collected'}</Text>
           </View>
-          <View style={[styles.statCard, { backgroundColor: '#FEF3C7' }]}>
-            <Text style={[styles.statValue, { color: '#D97706' }]}>{deliveryTodayCount}</Text>
-            <Text style={styles.statLabel}>Delivery Today</Text>
-          </View>
+          {activeTab === 'current' && (
+            <View style={[styles.statCard, { backgroundColor: '#FEF3C7' }]}>
+              <Text style={[styles.statValue, { color: '#D97706' }]}>{deliveryTodayCount}</Text>
+              <Text style={styles.statLabel}>Delivery Today</Text>
+            </View>
+          )}
         </View>
+      )}
+
+      {/* Sync All Button */}
+      {activeBills.length > 0 && (
+        <TouchableOpacity
+          style={[styles.syncAllBtn, !isConnected && styles.syncAllBtnDisabled]}
+          onPress={handleBatchSync}
+          activeOpacity={0.7}
+          disabled={syncing}
+        >
+          {syncing ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <MaterialCommunityIcons
+              name={isConnected ? 'cloud-sync' : 'cloud-off-outline'}
+              size={20}
+              color="#FFFFFF"
+            />
+          )}
+          <Text style={styles.syncAllBtnText}>
+            {syncing
+              ? 'Syncing...'
+              : activeTab === 'current'
+                ? `Sync All Current Bills (${currentBills.length})`
+                : `Sync All Completed (${completedBills.length})`
+            }
+          </Text>
+        </TouchableOpacity>
       )}
 
       {/* Search */}
@@ -201,17 +342,21 @@ export default function HistoryScreen({ route, navigation }) {
         />
       </View>
 
-      {/* List — sorted by dueDate */}
+      {/* List */}
       <FlatList
-        data={sortedBills}
+        data={displayBills}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        contentContainerStyle={bills.length === 0 ? styles.emptyContainer : styles.listContent}
+        contentContainerStyle={displayBills.length === 0 ? styles.emptyContainer : styles.listContent}
         ListEmptyComponent={
           <EmptyState
-            icon="receipt-text-outline"
-            title="No Bills Yet"
-            subtitle="Generated bills will appear here. Go to the Bills tab to create your first bill."
+            icon={activeTab === 'current' ? 'receipt-text-outline' : 'clipboard-check-outline'}
+            title={activeTab === 'current' ? 'No Active Bills' : 'No Completed Bills'}
+            subtitle={
+              activeTab === 'current'
+                ? 'Generated bills will appear here. Go to the Bills tab to create your first bill.'
+                : 'Bills marked as paid will appear here.'
+            }
           />
         }
         refreshing={loading}
@@ -231,8 +376,21 @@ export default function HistoryScreen({ route, navigation }) {
               <View style={styles.iconCircle}>
                 <MaterialCommunityIcons name="cash-register" size={32} color="#FFFFFF" />
               </View>
-              <Text style={styles.modalTitle}>Confirm Payment</Text>
+              <Text style={styles.modalTitle}>
+                {selectedBill.status === 'Completed' ? 'Bill Details' : 'Confirm Payment'}
+              </Text>
               <Text style={styles.billId}>{selectedBill.id}</Text>
+
+              {selectedBill.status === 'Completed' && (
+                <View style={styles.completedInfoBadge}>
+                  <MaterialCommunityIcons name="check-circle" size={16} color="#10B981" />
+                  <Text style={styles.completedInfoText}>
+                    Paid on {selectedBill.completedAt
+                      ? new Date(selectedBill.completedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                      : 'N/A'}
+                  </Text>
+                </View>
+              )}
 
               <View style={styles.summaryCard}>
                 <SummaryRow label="Customer" value={selectedBill.customerName || selectedBill.studentName} />
@@ -263,46 +421,51 @@ export default function HistoryScreen({ route, navigation }) {
                 ) : (
                   <>
                     <SummaryRow label="Weight" value={`${selectedBill.weight || selectedBill.totalWeight} kg`} />
-                    <SummaryRow 
-                      label="Service" 
-                      value={SERVICE_TYPES[selectedBill.serviceType]?.label || selectedBill.serviceType} 
+                    <SummaryRow
+                      label="Service"
+                      value={SERVICE_TYPES[selectedBill.serviceType]?.label || selectedBill.serviceType}
                     />
                   </>
                 )}
-                
+
                 <View style={styles.totalRow}>
                   <Text style={styles.totalLabel}>Total Amount</Text>
                   <Text style={styles.totalValue}>{formatCurrency(selectedBill.totalAmount)}</Text>
                 </View>
               </View>
 
-              <Button
-                mode="contained"
-                onPress={handlePaymentDone}
-                style={styles.payButton}
-                contentStyle={styles.payButtonContent}
-                buttonColor={appColors.primary}
-              >
-                Payment Done
-              </Button>
-              <Button
-                mode="contained"
-                onPress={handleOrderDone}
-                style={styles.doneButton}
-                contentStyle={styles.payButtonContent}
-                buttonColor="#10B981"
-                icon={({ size, color }) => (
-                  <MaterialCommunityIcons name="check-circle" size={size} color={color} />
-                )}
-              >
-                Done — Notify Customer
-              </Button>
+              {/* Only show action buttons for non-completed bills */}
+              {selectedBill.status !== 'Completed' && (
+                <>
+                  <Button
+                    mode="contained"
+                    onPress={handlePaymentDone}
+                    style={styles.payButton}
+                    contentStyle={styles.payButtonContent}
+                    buttonColor={appColors.primary}
+                  >
+                    Payment Done
+                  </Button>
+                  <Button
+                    mode="contained"
+                    onPress={handleOrderDone}
+                    style={styles.doneButton}
+                    contentStyle={styles.payButtonContent}
+                    buttonColor="#10B981"
+                    icon={({ size, color }) => (
+                      <MaterialCommunityIcons name="check-circle" size={size} color={color} />
+                    )}
+                  >
+                    Done — Notify Customer
+                  </Button>
+                </>
+              )}
               <Button
                 mode="outlined"
                 onPress={() => setPaymentModalVisible(false)}
                 style={styles.cancelButton}
               >
-                Cancel
+                {selectedBill.status === 'Completed' ? 'Close' : 'Cancel'}
               </Button>
             </ScrollView>
           )}
@@ -418,10 +581,18 @@ const styles = StyleSheet.create({
     color: appColors.textSecondary,
     marginTop: 4,
   },
+  tabContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 2,
+  },
+  segmentedButtons: {
+    // uses theme colors by default
+  },
   statsRow: {
     flexDirection: 'row',
     paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingTop: 14,
     gap: 8,
   },
   statCard: {
@@ -440,6 +611,31 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontWeight: '500',
     textAlign: 'center',
+  },
+  syncAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: '#06B6D4',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    elevation: 2,
+    shadowColor: '#06B6D4',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+  },
+  syncAllBtnDisabled: {
+    backgroundColor: '#94A3B8',
+  },
+  syncAllBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
   searchContainer: {
     paddingHorizontal: 16,
@@ -497,6 +693,21 @@ const styles = StyleSheet.create({
     color: appColors.primary,
     letterSpacing: 1,
     marginBottom: 20,
+  },
+  completedInfoBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 14,
+    marginBottom: 16,
+  },
+  completedInfoText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#10B981',
   },
   summaryCard: {
     width: '100%',

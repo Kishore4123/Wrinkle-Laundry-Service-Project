@@ -135,6 +135,22 @@ export const BillService = {
   },
 
   /**
+   * Get only current (active/pending) bills — excludes completed ones
+   */
+  async getCurrentBills() {
+    const bills = await this.getAll();
+    return bills.filter((b) => b.status !== 'Completed');
+  },
+
+  /**
+   * Get only completed (paid) bills
+   */
+  async getCompletedBills() {
+    const bills = await this.getAll();
+    return bills.filter((b) => b.status === 'Completed');
+  },
+
+  /**
    * Save a new bill with cart-based structure.
    * billData.cartItems is an array of:
    *   { serviceType, weight, items: [{category, count}], ratePerKg, subtotal }
@@ -175,6 +191,8 @@ export const BillService = {
       totalWeight: billData.totalWeight || 0,
       totalClothesCount: billData.totalClothesCount || 0,
       totalAmount: billData.totalAmount,
+      dueDate: billData.dueDate,
+      status: 'Pending',
       createdAt: Date.now(),
     };
 
@@ -213,20 +231,32 @@ export const BillService = {
   },
 
   /**
-   * Mark payment as done (Update customer stats and delete the bill)
+   * Mark a bill as completed/paid — moves it to completed history
+   * Updates customer stats and sets status to 'Completed'
    */
-  async markPaymentDone(billId) {
+  async markBillAsCompleted(billId) {
     const bills = await this.getAll();
     const billIndex = bills.findIndex((b) => b.id === billId);
     if (billIndex !== -1) {
       const bill = bills[billIndex];
       const totalWeight = bill.totalWeight || bill.weight || 0;
       const customerId = bill.customerId || bill.studentId;
+
       // 1. Update customer stats
       await CustomerService.updateStats(customerId, totalWeight, bill.totalAmount);
-      // 2. Remove bill from storage
-      bills.splice(billIndex, 1);
+
+      // 2. Mark as completed (do NOT delete)
+      bills[billIndex].status = 'Completed';
+      bills[billIndex].completedAt = new Date().toISOString();
+
       await AsyncStorage.setItem(BILLS_KEY, JSON.stringify(bills));
     }
+  },
+
+  /**
+   * Legacy: Mark payment as done (kept for backward compat — now calls markBillAsCompleted)
+   */
+  async markPaymentDone(billId) {
+    return this.markBillAsCompleted(billId);
   },
 };

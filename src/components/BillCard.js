@@ -1,5 +1,6 @@
 // BillCard — Displays a bill summary in a card with WhatsApp resend
 // Supports both new cart-based bills and legacy single-service bills
+// Supports 'current' and 'completed' variants
 import React from 'react';
 import { View, StyleSheet, TouchableOpacity, Linking, Alert } from 'react-native';
 import { Text, Chip } from 'react-native-paper';
@@ -7,9 +8,10 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { appColors, SERVICE_TYPES } from '../theme/theme';
 import { formatDate, formatCurrency, buildWhatsAppUrl, buildBillMessage } from '../utils/helpers';
 
-export default function BillCard({ bill, onPress }) {
+export default function BillCard({ bill, onPress, variant = 'current', onSyncPress }) {
   const customerName = bill.customerName || bill.studentName || 'Customer';
   const mobile = bill.mobile || '';
+  const isCompleted = variant === 'completed' || bill.status === 'Completed';
 
   // Determine service display
   const getServiceDisplay = () => {
@@ -45,23 +47,54 @@ export default function BillCard({ bill, onPress }) {
     }
   };
 
+  // Format completed date
+  const completedDateStr = bill.completedAt
+    ? new Date(bill.completedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    : '';
+
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity
+      style={[styles.card, isCompleted && styles.cardCompleted]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.billId}>{bill.id}</Text>
           <Text style={styles.date}>{formatDate(bill.createdAt)}</Text>
         </View>
-        <TouchableOpacity style={styles.whatsappBtn} onPress={handleWhatsApp} activeOpacity={0.7}>
-          <MaterialCommunityIcons name="whatsapp" size={22} color="#FFFFFF" />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          {isCompleted && onSyncPress && (
+            <TouchableOpacity style={styles.syncBtn} onPress={() => onSyncPress(bill)} activeOpacity={0.7}>
+              <MaterialCommunityIcons name="cloud-upload-outline" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.whatsappBtn} onPress={handleWhatsApp} activeOpacity={0.7}>
+            <MaterialCommunityIcons name="whatsapp" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* Completed Badge */}
+      {isCompleted && (
+        <View style={styles.completedBadgeRow}>
+          <View style={styles.completedBadge}>
+            <MaterialCommunityIcons name="check-circle" size={14} color="#10B981" />
+            <Text style={styles.completedBadgeText}>Paid</Text>
+          </View>
+          {completedDateStr ? (
+            <Text style={styles.completedDate}>{completedDateStr}</Text>
+          ) : null}
+        </View>
+      )}
 
       {/* Customer Info */}
       <View style={styles.customerRow}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{customerName.charAt(0).toUpperCase()}</Text>
+        <View style={[styles.avatar, isCompleted && styles.avatarCompleted]}>
+          <Text style={[styles.avatarText, isCompleted && styles.avatarTextCompleted]}>
+            {customerName.charAt(0).toUpperCase()}
+          </Text>
         </View>
         <View style={styles.customerInfo}>
           <Text style={styles.customerName} numberOfLines={1}>{customerName}</Text>
@@ -94,7 +127,9 @@ export default function BillCard({ bill, onPress }) {
       {/* Total */}
       <View style={styles.totalRow}>
         <Text style={styles.totalLabel}>Total Amount</Text>
-        <Text style={styles.totalAmount}>{formatCurrency(bill.totalAmount)}</Text>
+        <Text style={[styles.totalAmount, isCompleted && styles.totalAmountCompleted]}>
+          {formatCurrency(bill.totalAmount)}
+        </Text>
       </View>
     </TouchableOpacity>
   );
@@ -113,6 +148,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 8,
   },
+  cardCompleted: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#10B981',
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -120,6 +159,10 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   headerLeft: {},
+  headerRight: {
+    flexDirection: 'row',
+    gap: 8,
+  },
   billId: {
     fontSize: 13,
     fontWeight: '700',
@@ -144,6 +187,43 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
   },
+  syncBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#06B6D4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+    shadowColor: '#06B6D4',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  completedBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 8,
+  },
+  completedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  completedBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#10B981',
+  },
+  completedDate: {
+    fontSize: 11,
+    color: appColors.textLight,
+  },
   customerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -158,10 +238,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
+  avatarCompleted: {
+    backgroundColor: '#D1FAE5',
+  },
   avatarText: {
     fontSize: 17,
     fontWeight: '700',
     color: appColors.primary,
+  },
+  avatarTextCompleted: {
+    color: '#10B981',
   },
   customerInfo: {
     flex: 1,
@@ -217,5 +303,8 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     color: appColors.primary,
+  },
+  totalAmountCompleted: {
+    color: '#10B981',
   },
 });
