@@ -38,6 +38,7 @@ function initDB() {
     { name: 'dueDate', type: 'TEXT' },
     { name: 'completedAt', type: 'TEXT' },
     { name: 'createdAt', type: 'INTEGER' },
+    { name: 'createdByDevice', type: 'TEXT' },
   ];
 
   for (const col of columnsToAdd) {
@@ -84,6 +85,8 @@ module.exports = {
     const completedAt = bill.completedAt || null;
     const createdAt = bill.createdAt || Date.now();
     const timestamp = bill.timestamp || new Date().toISOString();
+    // Which device originated this bill — status changes are routed back to it.
+    const createdByDevice = bill.createdByDevice || null;
 
     // Check if bill already exists (upsert)
     const checkStmt = db.prepare('SELECT id FROM bills WHERE billId = ?');
@@ -104,13 +107,14 @@ module.exports = {
           status = ?,
           completedAt = ?,
           createdAt = ?,
-          timestamp = ?
+          timestamp = ?,
+          createdByDevice = COALESCE(?, createdByDevice)
         WHERE billId = ?
       `);
       updateStmt.run(
         customerName, customerCategory, phone, cartItems,
         totalWeight, totalClothesCount, totalAmount,
-        dueDate, status, completedAt, createdAt, timestamp, billId
+        dueDate, status, completedAt, createdAt, timestamp, createdByDevice, billId
       );
       return existing.id;
     }
@@ -118,13 +122,13 @@ module.exports = {
     // Insert new bill
     const insertStmt = db.prepare(`
       INSERT INTO bills (billId, customerName, customerCategory, phone, cartItems,
-        totalWeight, totalClothesCount, totalAmount, dueDate, status, completedAt, createdAt, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        totalWeight, totalClothesCount, totalAmount, dueDate, status, completedAt, createdAt, timestamp, createdByDevice)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const info = insertStmt.run(
       billId, customerName, customerCategory, phone, cartItems,
       totalWeight, totalClothesCount, totalAmount,
-      dueDate, status, completedAt, createdAt, timestamp
+      dueDate, status, completedAt, createdAt, timestamp, createdByDevice
     );
     return info.lastInsertRowid;
   },
@@ -133,6 +137,21 @@ module.exports = {
     const completedAt = status === 'Completed' ? new Date().toISOString() : null;
     const stmt = db.prepare('UPDATE bills SET status = ?, completedAt = ? WHERE billId = ?');
     stmt.run(status, completedAt, billId);
+  },
+
+  findBillById: (billId) => {
+    const row = db.prepare('SELECT * FROM bills WHERE billId = ?').get(billId);
+    if (!row) return undefined;
+    return { ...row, cartItems: safeJsonParse(row.cartItems, []) };
+  },
+
+  findBillsByPhone: (phone) => {
+    const rows = db.prepare('SELECT * FROM bills WHERE phone = ? ORDER BY timestamp DESC').all(phone);
+    return rows.map((row) => ({ ...row, cartItems: safeJsonParse(row.cartItems, []) }));
+  },
+
+  deleteBill: (billId) => {
+    db.prepare('DELETE FROM bills WHERE billId = ?').run(billId);
   },
 };
 

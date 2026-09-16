@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const db = require('./database');
+const { initSync, allocateBillNumber, pushStatus } = require('./sync');
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -21,6 +22,12 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
+
+  initSync({
+    onChange: () => {
+      BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('sync:changed'));
+    },
+  }).catch((e) => console.error('[Sync] init failed:', e.message));
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -50,27 +57,32 @@ ipcMain.handle('db:addBill', (event, billData) => {
   }
 });
 
-ipcMain.handle('db:updateBillStatus', (event, { id, status }) => {
+ipcMain.handle('db:updateBillStatus', async (event, { id, status }) => {
   try {
     db.updateBillStatus(id, status);
+    // Route the change back to the phone that created the bill, if any.
+    const bill = db.findBillById(id);
+    if (bill && bill.createdByDevice) {
+      await pushStatus(id, status, bill.completedAt, bill.createdByDevice).catch(() => {});
+    }
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
   }
 });
 
-const QRCode = require('qrcode');
-
-ipcMain.handle('app:generateQR', async (event, text) => {
+ipcMain.handle('db:deleteBill', (event, billId) => {
   try {
-    const url = await QRCode.toDataURL(text, {
-      margin: 2,
-      color: {
-        dark: '#0f172a',
-        light: '#ffffff'
-      }
-    });
-    return { success: true, data: url };
+    db.deleteBill(billId);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('sync:allocateBillNumber', async () => {
+  try {
+    return { success: true, data: await allocateBillNumber() };
   } catch (error) {
     return { success: false, error: error.message };
   }

@@ -23,7 +23,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         const items = document.getElementById('order-items').value.split(',').map(i => i.trim());
         const total = parseFloat(document.getElementById('order-total').value);
 
-        const billId = 'ORD-' + Math.random().toString(36).substr(2, 6).toUpperCase();
+        // Bill numbers come from the shared Firestore counter so that phones and
+        // this desktop can never mint the same number.
+        const numRes = await window.api.allocateBillNumber();
+        if (!numRes.success) {
+            alert('No internet connection — a bill number cannot be reserved. Please reconnect and try again.');
+            return;
+        }
+        const now = new Date();
+        const yy = String(now.getFullYear()).slice(-2);
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const dd = String(now.getDate()).padStart(2, '0');
+        const billId = `WR-${yy}${mm}${dd}-${String(numRes.data).padStart(3, '0')}`;
 
         const billData = {
             billId,
@@ -35,13 +46,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             timestamp: new Date().toISOString()
         };
 
-        // Save locally
+        // Save locally. Desktop-created bills are never uploaded — they live in
+        // the shop archive only.
         const res = await window.api.addBill(billData);
         if (res.success) {
-            // Broadcast to mobile if connected
-            if (window.sendDataChannelMessage) {
-                window.sendDataChannelMessage({ type: 'sync-bill', billData });
-            }
             document.getElementById('order-modal').classList.add('hidden');
             document.getElementById('new-order-form').reset();
             await loadBills();
@@ -57,6 +65,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         );
         renderTable(filtered);
     });
+
+    // Refresh whenever the main process ingests a bill from a phone.
+    if (window.api.onSyncChanged) window.api.onSyncChanged(() => loadBills());
+
+    // Firestore manages its own reconnection, so this is a static indicator.
+    const statusEl = document.getElementById('connection-status');
+    if (statusEl) {
+        statusEl.classList.add('online');
+        statusEl.classList.remove('offline');
+        const t = statusEl.querySelector('.text');
+        if (t) t.textContent = 'Cloud Sync Active';
+    }
+    const metricSync = document.getElementById('metric-sync');
+    if (metricSync) {
+        metricSync.textContent = 'Online';
+        metricSync.classList.add('sync-online');
+        metricSync.classList.remove('sync-offline');
+    }
 });
 
 async function loadBills() {
@@ -68,7 +94,6 @@ async function loadBills() {
     }
 }
 
-// Expose refresh function to other scripts (like webrtc.js)
 window.refreshBills = loadBills;
 
 function renderTable(bills) {
@@ -124,6 +149,7 @@ function renderTable(bills) {
                         ? `<small style="color: var(--text-muted);">${new Date(bill.completedAt).toLocaleDateString('en-IN')}</small>`
                         : ''
                 }
+                <button class="btn secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-left: 0.3rem;" onclick="deleteBill('${bill.billId}')">Delete</button>
             </td>
         `;
         tbody.appendChild(tr);
@@ -140,14 +166,15 @@ function getServiceLabel(serviceType) {
 }
 
 window.markCompleted = async (billId) => {
+    // The main process routes the status change back to the originating phone.
     const res = await window.api.updateBillStatus(billId, 'Completed');
-    if (res.success) {
-        // Broadcast status update to mobile if connected
-        if (window.sendDataChannelMessage) {
-            window.sendDataChannelMessage({ type: 'sync-status', billId, status: 'Completed' });
-        }
-        loadBills();
-    }
+    if (res.success) loadBills();
+};
+
+window.deleteBill = async (billId) => {
+    if (!confirm(`Delete bill ${billId}? This removes it from the shop archive permanently.`)) return;
+    const res = await window.api.deleteBill(billId);
+    if (res.success) loadBills();
 };
 
 function updateMetrics() {
