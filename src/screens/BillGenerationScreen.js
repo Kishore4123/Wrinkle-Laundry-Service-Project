@@ -17,15 +17,16 @@ import ClothingItemPicker from '../components/ClothingItemPicker';
 import PiecewiseItemPicker from '../components/PiecewiseItemPicker';
 import CartItemCard from '../components/CartItemCard';
 import { appColors, SERVICE_TYPES, DEFAULT_CATEGORIES_PRICING } from '../theme/theme';
-import { formatCurrency } from '../utils/helpers';
-import { useWebRTC } from '../services/WebRTCContext';
+import { formatCurrency, formatBillId } from '../utils/helpers';
+import { useSync } from '../services/SyncContext';
+import { allocateBillNumber } from '../services/SyncService';
 
 // Remove IRON_DRY from options here if it exists in SERVICE_TYPES
 const SERVICE_KEYS = Object.keys(SERVICE_TYPES).filter(k => k !== 'IRON_DRY');
 
 export default function BillGenerationScreen() {
   // Customer search
-  const { syncBill: syncBillToDesktop } = useWebRTC();
+  const { syncBill: syncBillToDesktop } = useSync();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -177,6 +178,25 @@ export default function BillGenerationScreen() {
       );
       const totalAmount = cart.reduce((sum, item) => sum + item.subtotal, 0);
 
+      // The bill number comes from the shared Firestore counter, so it is unique
+      // across every phone and the desktop. Without connectivity there is no
+      // number to issue — the receipt carries it and it can never change later.
+      let billNumber;
+      try {
+        billNumber = await allocateBillNumber();
+      } catch (e) {
+        setSnackbar({
+          visible: true,
+          message: 'No internet connection — a bill number cannot be reserved. Please reconnect and try again.',
+        });
+        setLoading(false);
+        return;
+      }
+
+      const now = new Date();
+      const datePrefix = `${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+      const billId = formatBillId(datePrefix, billNumber);
+
       const bill = await BillService.save({
         customerId: selectedCustomer.id,
         customerName: selectedCustomer.name,
@@ -186,9 +206,10 @@ export default function BillGenerationScreen() {
         totalWeight,
         totalClothesCount,
         totalAmount: Math.round(totalAmount * 100) / 100,
-      });
+      }, billId);
+
       setGeneratedBill(bill);
-      try { syncBillToDesktop(bill); } catch (e) {}
+      syncBillToDesktop(bill);
       setModalVisible(true);
     } catch (error) {
       setSnackbar({ visible: true, message: 'Failed to generate bill. Please try again.' });

@@ -10,7 +10,8 @@ import EmptyState from '../components/EmptyState';
 import { appColors, SERVICE_TYPES } from '../theme/theme';
 import { formatDate, formatCurrency, buildWhatsAppUrl, buildOrderReadyMessage } from '../utils/helpers';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useWebRTC } from '../services/WebRTCContext';
+import { useSync } from '../services/SyncContext';
+import { deleteRemoteBill } from '../services/SyncService';
 
 // Format a Date object to DD/MM/YYYY string
 function formatDateDDMMYYYY(date) {
@@ -52,7 +53,7 @@ export default function HistoryScreen({ route, navigation }) {
   const [deliveryDate, setDeliveryDate] = useState(null);
   const [showDeliveryDatePicker, setShowDeliveryDatePicker] = useState(false);
 
-  const { syncBill, isConnected } = useWebRTC();
+  const { syncBill, flush, searchRemote } = useSync();
 
   // Watch for scanned bill
   useFocusEffect(
@@ -172,78 +173,100 @@ export default function HistoryScreen({ route, navigation }) {
 
   // ── Batch Sync Handler ───────────────────────────────────
   const handleBatchSync = async () => {
-    if (!isConnected) {
-      Alert.alert(
-        'Not Connected',
-        'Please connect to the Desktop Command Center first.\n\nGo to Settings → Desktop Sync to pair.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
-    const billsToSync = activeTab === 'current' ? currentBills : completedBills;
-    if (billsToSync.length === 0) {
-      Alert.alert('Nothing to Sync', 'No bills to send to the Desktop.');
-      return;
-    }
-
     setSyncing(true);
-    let successCount = 0;
-    for (const bill of billsToSync) {
-      try {
-        syncBill(bill);
-        successCount++;
-      } catch (e) {
-        console.warn('[Sync] Failed to sync bill:', bill.id, e);
-      }
-    }
+    const count = await flush();
     setSyncing(false);
 
     Alert.alert(
-      'Sync Complete ✅',
-      `Successfully sent ${successCount} ${activeTab === 'current' ? 'current' : 'completed'} bill${successCount !== 1 ? 's' : ''} to Desktop Command Center.`,
+      count > 0 ? 'Sync Complete ✅' : 'Nothing to Sync',
+      count > 0
+        ? `Sent ${count} bill${count !== 1 ? 's' : ''} to the Command Center.`
+        : 'All bills are already synced.',
       [{ text: 'OK' }]
     );
   };
 
   // ── Single Bill Sync (for completed history) ─────────────
-  const handleSingleSync = (bill) => {
-    if (!isConnected) {
-      Alert.alert('Not Connected', 'Please connect to the Desktop Command Center first.\n\nGo to Settings → Desktop Sync to pair.');
+  const handleSingleSync = async (bill) => {
+    await syncBill(bill);
+    Alert.alert('Synced ✅', `Bill ${bill.id} sent to the Command Center.`);
+  };
+
+  // ── Remote lookup, on submit only ────────────────────────
+  // Deliberately not wired to onChangeText: that fires per keystroke, and each
+  // remote lookup costs a Firestore write plus a listener.
+  const handleSearchSubmit = async () => {
+    const query = searchQuery.trim();
+    if (query.length === 0) return;
+
+    const local = await BillService.search(query);
+    if (local.length > 0) return; // already on screen via handleSearch
+
+    setSyncing(true);
+    const remote = await searchRemote(query);
+    setSyncing(false);
+
+    if (remote.length === 0) {
+      Alert.alert(
+        'Not Found',
+        'No matching bill on this phone, and the shop computer did not respond. It may be switched off.'
+      );
       return;
     }
-    try {
-      syncBill(bill);
-      Alert.alert('Synced ✅', `Bill ${bill.id} sent to Desktop.`);
-    } catch (e) {
-      Alert.alert('Sync Failed', 'Could not send this bill. Please try again.');
-    }
+
+    await BillService.cacheBills(remote);
+    await loadBills();
+    Alert.alert('Found', `Retrieved ${remote.length} bill${remote.length !== 1 ? 's' : ''} from the shop archive.`);
+  };
+
+  // ── Delete (long-press a bill) ───────────────────────────
+  const handleDeleteBill = (bill) => {
+    Alert.alert(
+      'Delete Bill',
+      `Remove ${bill.id} from this phone? The shop's copy is not affected.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteRemoteBill(bill.id);
+            await BillService.delete(bill.id);
+            loadBills();
+          },
+        },
+      ]
+    );
   };
 
   // ── Render ───────────────────────────────────────────────
   const renderItem = ({ item }) => {
     if (activeTab === 'current') {
       return (
+        <TouchableOpacity onLongPress={() => handleDeleteBill(item)} activeOpacity={1}>
+          <BillCard
+            bill={item}
+            variant="current"
+            onPress={() => {
+              setSelectedBill(item);
+              setPaymentModalVisible(true);
+            }}
+          />
+        </TouchableOpacity>
+      );
+    }
+    return (
+      <TouchableOpacity onLongPress={() => handleDeleteBill(item)} activeOpacity={1}>
         <BillCard
           bill={item}
-          variant="current"
+          variant="completed"
           onPress={() => {
             setSelectedBill(item);
             setPaymentModalVisible(true);
           }}
+          onSyncPress={handleSingleSync}
         />
-      );
-    }
-    return (
-      <BillCard
-        bill={item}
-        variant="completed"
-        onPress={() => {
-          setSelectedBill(item);
-          setPaymentModalVisible(true);
-        }}
-        onSyncPress={handleSingleSync}
-      />
+      </TouchableOpacity>
     );
   };
 
@@ -335,6 +358,7 @@ export default function HistoryScreen({ route, navigation }) {
         <Searchbar
           placeholder="Search by name, mobile, or bill ID..."
           onChangeText={handleSearch}
+          onSubmitEditing={handleSearchSubmit}
           value={searchQuery}
           style={styles.searchbar}
           inputStyle={styles.searchInput}

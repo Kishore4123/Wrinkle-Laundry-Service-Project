@@ -7,7 +7,6 @@ import { useFocusEffect } from '@react-navigation/native';
 import { SettingsService } from '../services/settingsStorage';
 import { appColors, SERVICE_TYPES, DEFAULT_CATEGORIES_PRICING } from '../theme/theme';
 import SyncStatusBadge from '../components/SyncStatusBadge';
-import PairingModal from '../components/PairingModal';
 
 export default function SettingsScreen() {
   const [categories, setCategories] = useState({});
@@ -18,7 +17,6 @@ export default function SettingsScreen() {
   // For adding a new category
   const [newCategoryName, setNewCategoryName] = useState('');
   const [showAddCategory, setShowAddCategory] = useState(false);
-  const [pairingVisible, setPairingVisible] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -151,7 +149,7 @@ export default function SettingsScreen() {
             {/* Desktop Sync */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Desktop Sync</Text>
-          <SyncStatusBadge onPress={() => setPairingVisible(true)} />
+          <SyncStatusBadge />
         </View>
       </ScrollView>
 
@@ -237,11 +235,10 @@ export default function SettingsScreen() {
         {/* Desktop Sync */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Desktop Sync</Text>
-          <SyncStatusBadge onPress={() => setPairingVisible(true)} />
+          <SyncStatusBadge />
         </View>
       </ScrollView>
 
-      <PairingModal visible={pairingVisible} onDismiss={() => setPairingVisible(false)} />
 
       <Snackbar
         visible={snackbar.visible}

@@ -7,18 +7,18 @@ import { NavigationContainer } from '@react-navigation/native';
 import { Provider as PaperProvider } from 'react-native-paper';
 import { theme } from './src/theme/theme';
 import AppNavigator from './src/navigation/AppNavigator';
-import { WebRTCProvider } from './src/services/WebRTCContext';
+import { SyncProvider } from './src/services/SyncContext';
 
 export default function App() {
   return (
     <SafeAreaProvider>
       <PaperProvider theme={theme}>
-        <WebRTCProvider>
+        <SyncProvider>
           <NavigationContainer>
-          <StatusBar style="auto" />
-          <AppNavigator />
-        </NavigationContainer>
-        </WebRTCProvider>
+            <StatusBar style="auto" />
+            <AppNavigator />
+          </NavigationContainer>
+        </SyncProvider>
       </PaperProvider>
     </SafeAreaProvider>
   );

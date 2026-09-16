@@ -1,90 +1,53 @@
-// SyncStatusBadge.js — Tappable connection status pill for WebRTC sync
+// SyncStatusBadge.js — cloud sync status pill. Tapping it retries pending bills.
 import React from 'react';
-import { TouchableOpacity, View, StyleSheet } from 'react-native';
+import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useWebRTC, ConnectionState } from '../services/WebRTCContext';
-import { appColors } from '../theme/theme';
-
-const STATE_CONFIG = {
-  [ConnectionState.CONNECTED]: { color: '#10B981', label: 'Connected', icon: 'cloud-check' },
-  [ConnectionState.CONNECTING]: { color: '#F59E0B', label: 'Connecting...', icon: 'cloud-sync' },
-  [ConnectionState.SIGNALING]: { color: '#F59E0B', label: 'Pairing...', icon: 'cloud-sync' },
-  [ConnectionState.DISCONNECTED]: { color: '#EF4444', label: 'Not Connected', icon: 'cloud-off-outline' },
-};
+import { useSync } from '../services/SyncContext';
 
 export default function SyncStatusBadge({ onPress }) {
-  const { connectionState, offlineQueueCount, latencyMs, pairedRoomId } = useWebRTC();
-  const config = STATE_CONFIG[connectionState] || STATE_CONFIG[ConnectionState.DISCONNECTED];
+  const { isOnline, pendingCount, flush } = useSync();
+
+  const color = isOnline ? '#10B981' : '#EF4444';
+  const icon = isOnline ? 'cloud-check' : 'cloud-off-outline';
+  const label = isOnline ? 'Cloud Connected' : 'Offline';
+
+  const handlePress = async () => {
+    if (onPress) onPress();
+    await flush();
+  };
 
   return (
-    <TouchableOpacity style={styles.container} onPress={onPress} activeOpacity={0.7}>
-      <View style={styles.row}>
-        <View style={[styles.dot, { backgroundColor: config.color }]} />
-        <MaterialCommunityIcons name={config.icon} size={22} color={config.color} />
-        <View style={styles.textCol}>
-          <Text style={styles.label}>{config.label}</Text>
-          {pairedRoomId && (
-            <Text style={styles.sub}>Room: {pairedRoomId}</Text>
-          )}
-          {connectionState === ConnectionState.CONNECTED && latencyMs != null && (
-            <Text style={styles.sub}>{latencyMs}ms latency</Text>
-          )}
-        </View>
-        {offlineQueueCount > 0 && (
+    <TouchableOpacity onPress={handlePress} activeOpacity={0.7}>
+      <View style={[styles.pill, { borderColor: color }]}>
+        <MaterialCommunityIcons name={icon} size={16} color={color} />
+        <Text style={[styles.label, { color }]}>{label}</Text>
+        {pendingCount > 0 && (
           <View style={styles.badge}>
-            <Text style={styles.badgeText}>{offlineQueueCount}</Text>
+            <Text style={styles.badgeText}>{pendingCount} pending</Text>
           </View>
         )}
-        <MaterialCommunityIcons name="chevron-right" size={20} color={appColors.textLight} />
       </View>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    backgroundColor: appColors.surface,
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: appColors.border,
-  },
-  row: {
+  pill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 6,
+    borderWidth: 1.5,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  textCol: {
-    flex: 1,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: appColors.text,
-  },
-  sub: {
-    fontSize: 11,
-    color: appColors.textSecondary,
-    marginTop: 1,
-  },
+  label: { fontSize: 12, fontWeight: '700' },
   badge: {
-    backgroundColor: '#EF4444',
+    backgroundColor: '#F59E0B',
     borderRadius: 10,
-    minWidth: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
   },
-  badgeText: {
-    color: '#FFF',
-    fontSize: 11,
-    fontWeight: '700',
-  },
+  badgeText: { fontSize: 10, color: '#FFFFFF', fontWeight: '700' },
 });

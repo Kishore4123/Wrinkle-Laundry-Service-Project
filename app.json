@@ -22,8 +22,7 @@
         "backgroundColor": "#FFFFFF"
       },
       "permissions": [
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.CAMERA"
       ],
       "package": "com.wrinkle.laundryservice"
     },
@@ -36,8 +35,7 @@
         {
           "cameraPermission": "Allow Wrinkle Laundry Service to access your camera to scan QR codes."
         }
-      ],
-      "@config-plugins/react-native-webrtc"
+      ]
     ],
     "extra": {
       "eas": {
