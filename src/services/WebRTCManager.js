@@ -1,4 +1,4 @@
-// WebRTCManager.js — Singleton service managing WebRTC signaling, peer connection, and data channel
+// WebRTCManager.js - Singleton service managing WebRTC signaling, peer connection, and data channel
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate } from 'react-native-webrtc';
 
@@ -34,6 +34,7 @@ class WebRTCManagerClass extends EventEmitter {
     this._pingInterval = null;
     this._lastPingTime = null;
     this._intentionalDisconnect = false;
+    this._candidateQueue = [];
   }
 
   get connectionState() { return this._state; }
@@ -63,22 +64,31 @@ class WebRTCManagerClass extends EventEmitter {
     switch (msg.type) {
       case 'joined': break;
       case 'peer-joined':
-        await this._createPC();
-        await this._sendOffer();
+        // Desktop is the offerer. Mobile waits for offer.
         break;
       case 'answer':
-        if (this._pc) await this._pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        if (this._pc) {
+          await this._pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          this._flushCandidates();
+        }
         break;
       case 'candidate':
-        if (this._pc && msg.candidate) await this._pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        if (this._pc && msg.candidate) {
+          if (this._pc.remoteDescription) {
+            await this._pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          } else {
+            this._candidateQueue.push(msg.candidate);
+          }
+        }
         break;
       case 'peer-left':
         this._cleanupPC();
         if (this._ws && this._ws.readyState === WebSocket.OPEN) this._setState(ConnectionState.SIGNALING);
         break;
       case 'offer':
-        await this._createPC();
+        await this._createPC(false);
         await this._pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        this._flushCandidates();
         const ans = await this._pc.createAnswer();
         await this._pc.setLocalDescription(ans);
         this._ws.send(JSON.stringify({ type: 'answer', roomId: this._roomId, sdp: ans }));
@@ -86,14 +96,34 @@ class WebRTCManagerClass extends EventEmitter {
     }
   }
 
-  async _createPC() {
+  async _createPC(isOfferer = false) {
     this._cleanupPC();
     this._pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     this._pc.onicecandidate = (e) => { if (e.candidate && this._ws?.readyState === WebSocket.OPEN) this._ws.send(JSON.stringify({ type: 'candidate', roomId: this._roomId, candidate: e.candidate })); };
-    this._pc.oniceconnectionstatechange = () => { if (this._pc?.iceConnectionState === 'failed' || this._pc?.iceConnectionState === 'disconnected') { if (!this._intentionalDisconnect) { this._cleanupPC(); this._scheduleReconnect(); } } };
-    this._dataChannel = this._pc.createDataChannel('laundry-sync', { ordered: true });
-    this._setupDC(this._dataChannel);
-    this._pc.ondatachannel = (e) => { this._dataChannel = e.channel; this._setupDC(this._dataChannel); };
+    
+    // Do not teardown on disconnected (which is a temporary state)
+    this._pc.oniceconnectionstatechange = () => { 
+      if (this._pc?.iceConnectionState === 'failed') { 
+        if (!this._intentionalDisconnect) { this._cleanupPC(); this._scheduleReconnect(); } 
+      } 
+    };
+
+    if (isOfferer) {
+      this._dataChannel = this._pc.createDataChannel('laundry-sync', { ordered: true });
+      this._setupDC(this._dataChannel);
+    }
+
+    this._pc.ondatachannel = (e) => { 
+      this._dataChannel = e.channel; 
+      this._setupDC(this._dataChannel); 
+    };
+  }
+
+  async _flushCandidates() {
+    for (const c of this._candidateQueue) {
+      try { await this._pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+    }
+    this._candidateQueue = [];
   }
 
   _setupDC(ch) {
@@ -180,6 +210,7 @@ class WebRTCManagerClass extends EventEmitter {
   }
 
   _cleanupPC() {
+    this._candidateQueue = [];
     if (this._dataChannel) { try { this._dataChannel.close(); } catch (e) {} this._dataChannel = null; }
     if (this._pc) { try { this._pc.close(); } catch (e) {} this._pc = null; }
   }
