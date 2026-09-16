@@ -1,7 +1,7 @@
 // Persistent storage service using AsyncStorage
 // Handles all CRUD operations for Customers and Bills
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { generateId, generateBillId } from '../utils/helpers';
+import { generateId } from '../utils/helpers';
 
 const CUSTOMERS_KEY = '@laundry_customers';
 const BILLS_KEY = '@laundry_bills';
@@ -154,35 +154,17 @@ export const BillService = {
    * Save a new bill with cart-based structure.
    * billData.cartItems is an array of:
    *   { serviceType, weight, items: [{category, count}], ratePerKg, subtotal }
+   *
+   * The billId is allocated by the caller from the centralized Firestore counter —
+   * this function never invents one, because locally-derived sequences collide
+   * across devices.
    */
-  async save(billData) {
+  async save(billData, billId) {
+    if (!billId) throw new Error('billId is required — allocate it before saving.');
     const bills = await this.getAll();
 
-    // Generate Sequential ID: WR-YYMMDD-XXX
-    const today = new Date();
-    const yy = String(today.getFullYear()).slice(-2);
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-    const datePrefix = `${yy}${mm}${dd}`;
-
-    let maxSeq = 0;
-    const prefixStr = `WR-${datePrefix}-`;
-
-    bills.forEach(b => {
-      if (b.id && b.id.startsWith(prefixStr)) {
-        const seqStr = b.id.replace(prefixStr, '');
-        const seq = parseInt(seqStr, 10);
-        if (!isNaN(seq) && seq > maxSeq) {
-          maxSeq = seq;
-        }
-      }
-    });
-
-    const newSeq = maxSeq + 1;
-    const newBillId = `WR-${datePrefix}-${String(newSeq).padStart(3, '0')}`;
-
     const newBill = {
-      id: newBillId,
+      id: billId,
       customerId: billData.customerId,
       customerName: billData.customerName,
       customerCategory: billData.customerCategory || 'Student',
@@ -194,11 +176,56 @@ export const BillService = {
       dueDate: billData.dueDate,
       status: 'Pending',
       createdAt: Date.now(),
+      synced: false,
     };
 
     bills.push(newBill);
     await AsyncStorage.setItem(BILLS_KEY, JSON.stringify(bills));
     return newBill;
+  },
+
+  async markSynced(billId) {
+    const bills = await this.getAll();
+    const i = bills.findIndex((b) => b.id === billId);
+    if (i !== -1) {
+      bills[i].synced = true;
+      await AsyncStorage.setItem(BILLS_KEY, JSON.stringify(bills));
+    }
+  },
+
+  async getPendingSync() {
+    const bills = await this.getAll();
+    return bills.filter((b) => b.synced !== true);
+  },
+
+  async applyRemoteStatus(billId, status, completedAt) {
+    const bills = await this.getAll();
+    const i = bills.findIndex((b) => b.id === billId);
+    if (i === -1) return;
+    bills[i].status = status;
+    if (completedAt) bills[i].completedAt = completedAt;
+    await AsyncStorage.setItem(BILLS_KEY, JSON.stringify(bills));
+  },
+
+  /**
+   * Upsert bills retrieved from the desktop archive so they behave exactly like
+   * locally-created ones. Marked synced — the desktop already has them.
+   */
+  async cacheBills(remoteBills) {
+    if (!remoteBills || remoteBills.length === 0) return;
+    const bills = await this.getAll();
+    const byId = new Map(bills.map((b) => [b.id, b]));
+    for (const remote of remoteBills) {
+      const id = remote.id || remote.billId;
+      if (!id) continue;
+      byId.set(id, { ...(byId.get(id) || {}), ...remote, id, synced: true });
+    }
+    await AsyncStorage.setItem(BILLS_KEY, JSON.stringify(Array.from(byId.values())));
+  },
+
+  async delete(billId) {
+    const bills = await this.getAll();
+    await AsyncStorage.setItem(BILLS_KEY, JSON.stringify(bills.filter((b) => b.id !== billId)));
   },
 
   /**
