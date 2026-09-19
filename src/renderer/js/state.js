@@ -6,9 +6,31 @@
 const State = {
     bills: [],
     customers: [],
+    expenses: [],
+    expenseCategories: [],
     pricing: {},
     devices: [],
 };
+
+// Inline SVG icons — no icon font, no CDN, so the UI renders with no network.
+const ICONS = {
+    receipt: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    check: '<path d="M20 6L9 17l-5-5"/>',
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>',
+    wallet: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+    trend: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
+    coins: '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/>',
+    percent: '<path d="M19 5L5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
+    sum: '<path d="M18 7V4H6l6 8-6 8h12v-3"/>',
+    tag: '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/>',
+};
+
+/** Returns an inline SVG string for one of the ICONS above. */
+function icon(name) {
+    const body = ICONS[name] || ICONS.receipt;
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -64,6 +86,13 @@ async function refreshDevices() {
     State.devices = (await call(window.api.listDevices(), [])) || [];
 }
 
+async function refreshExpenses() {
+    State.expenses = (await call(window.api.listExpenses(), [])) || [];
+    if (!State.expenseCategories.length) {
+        State.expenseCategories = (await call(window.api.expenseCategories(), [])) || ['Other'];
+    }
+}
+
 function categoryNames() {
     const names = Object.keys(State.pricing);
     return names.length ? names : ['Student', 'Public'];
@@ -74,4 +103,8 @@ function pricingFor(category) {
     return State.pricing[category] || State.pricing[categoryNames()[0]] || { kgRates: {}, pieceRates: {} };
 }
 
-window.App = { State, $, el, esc, toast, call, refreshBills, refreshCustomers, refreshPricing, refreshDevices, categoryNames, pricingFor };
+window.App = {
+    State, $, el, esc, icon, toast, call,
+    refreshBills, refreshCustomers, refreshExpenses, refreshPricing, refreshDevices,
+    categoryNames, pricingFor,
+};

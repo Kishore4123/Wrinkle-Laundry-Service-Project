@@ -127,8 +127,30 @@ function initDB() {
   `);
   db.exec('CREATE INDEX IF NOT EXISTS idx_ledger_collected ON revenue_ledger (collectedAt)');
 
+  // Money going out. Mirrored to Firestore so every desktop in the shop sees
+  // the same books.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'Other',
+      amount REAL NOT NULL DEFAULT 0,
+      note TEXT,
+      spentAt INTEGER NOT NULL,
+      createdAt INTEGER,
+      updatedAt INTEGER,
+      recordedBy TEXT
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_spent ON expenses (spentAt)');
+
   backfillLedger();
 }
+
+const EXPENSE_CATEGORIES = [
+  'Rent', 'Salary', 'Electricity', 'Water', 'Detergent & Supplies',
+  'Machine Maintenance', 'Transport', 'Packaging', 'Other',
+];
 
 /**
  * One-time catch-up for databases that predate the ledger: any bill already
@@ -405,6 +427,113 @@ module.exports = {
       INSERT INTO app_config (key, value, updatedAt) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updatedAt = excluded.updatedAt
     `).run(key, JSON.stringify(value), Date.now());
+  },
+
+  // ── Expenses ────────────────────────────────────────────────────────────
+
+  expenseCategories: () => EXPENSE_CATEGORIES.slice(),
+
+  getExpenses: (limit = 500) =>
+    db.prepare('SELECT * FROM expenses ORDER BY spentAt DESC LIMIT ?').all(limit),
+
+  upsertExpense: (e) => {
+    db.prepare(`
+      INSERT INTO expenses (id, title, category, amount, note, spentAt, createdAt, updatedAt, recordedBy)
+      VALUES (@id, @title, @category, @amount, @note, @spentAt, @createdAt, @updatedAt, @recordedBy)
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        category = excluded.category,
+        amount = excluded.amount,
+        note = excluded.note,
+        spentAt = excluded.spentAt,
+        updatedAt = excluded.updatedAt,
+        recordedBy = excluded.recordedBy
+    `).run({
+      id: e.id,
+      title: e.title || 'Expense',
+      category: e.category || 'Other',
+      amount: Number(e.amount) || 0,
+      note: e.note || null,
+      spentAt: e.spentAt || Date.now(),
+      createdAt: e.createdAt || Date.now(),
+      updatedAt: e.updatedAt || Date.now(),
+      recordedBy: e.recordedBy || null,
+    });
+    return db.prepare('SELECT * FROM expenses WHERE id = ?').get(e.id);
+  },
+
+  deleteExpense: (id) => {
+    db.prepare('DELETE FROM expenses WHERE id = ?').run(id);
+  },
+
+  // ── Finance (revenue from the ledger, minus expenses) ───────────────────
+
+  /**
+   * Profit and loss over the same bucketing the revenue tab uses, so the two
+   * tabs always agree. Revenue comes from the ledger (survives bill deletion);
+   * expenses come from the expenses table.
+   */
+  getFinanceStats: ({ mode = 'months', count = 12 } = {}) => {
+    const entries = db.prepare('SELECT amount, collectedAt FROM revenue_ledger').all();
+    const spends = db.prepare('SELECT amount, category, spentAt FROM expenses').all();
+
+    const buckets = new Map();
+    const now = new Date();
+
+    if (mode === 'years') {
+      for (let i = count - 1; i >= 0; i--) {
+        buckets.set(String(now.getFullYear() - i), { revenue: 0, expense: 0 });
+      }
+    } else if (mode === 'days') {
+      for (let i = count - 1; i >= 0; i--) {
+        buckets.set(dayKey(new Date(now.getTime() - i * 86400000)), { revenue: 0, expense: 0 });
+      }
+    } else {
+      for (let i = count - 1; i >= 0; i--) {
+        buckets.set(monthKey(new Date(now.getFullYear(), now.getMonth() - i, 1)), { revenue: 0, expense: 0 });
+      }
+    }
+
+    const keyFor = mode === 'years' ? yearKey : mode === 'days' ? dayKey : monthKey;
+
+    let totalRevenue = 0, totalExpense = 0;
+    for (const e of entries) {
+      totalRevenue += e.amount || 0;
+      const slot = buckets.get(keyFor(new Date(e.collectedAt)));
+      if (slot) slot.revenue += e.amount || 0;
+    }
+
+    const expenseByCategory = new Map();
+    for (const s of spends) {
+      totalExpense += s.amount || 0;
+      expenseByCategory.set(s.category || 'Other', (expenseByCategory.get(s.category || 'Other') || 0) + (s.amount || 0));
+      const slot = buckets.get(keyFor(new Date(s.spentAt)));
+      if (slot) slot.expense += s.amount || 0;
+    }
+
+    const series = Array.from(buckets, ([key, v]) => ({
+      key, ...v, profit: v.revenue - v.expense,
+    }));
+
+    const windowRevenue = series.reduce((s, b) => s + b.revenue, 0);
+    const windowExpense = series.reduce((s, b) => s + b.expense, 0);
+
+    return {
+      mode,
+      series,
+      windowRevenue,
+      windowExpense,
+      windowProfit: windowRevenue - windowExpense,
+      totalRevenue,
+      totalExpense,
+      totalProfit: totalRevenue - totalExpense,
+      // Margin over the visible window; null rather than 0 when nothing was
+      // earned, so the UI can show "—" instead of a misleading 0%.
+      margin: windowRevenue > 0 ? (windowRevenue - windowExpense) / windowRevenue : null,
+      expenseByCategory: Array.from(expenseByCategory, ([name, amount]) => ({ name, amount }))
+        .sort((a, b) => b.amount - a.amount),
+      expenseCount: spends.length,
+    };
   },
 
   // ── Revenue reporting (always from the ledger) ──────────────────────────

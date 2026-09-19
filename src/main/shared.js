@@ -55,7 +55,53 @@ function init(firestore, onChange) {
     },
     (err) => console.error('[Shared] devices listener error:', err.message)
   );
+
+  // Expenses — durable and shared, so every desktop in the shop sees one set
+  // of books rather than each keeping its own.
+  onSnapshot(
+    collection(fs, 'expenses'),
+    (snap) => {
+      snap.docChanges().forEach((change) => {
+        try {
+          if (change.type === 'removed') db.deleteExpense(change.doc.id);
+          else db.upsertExpense(change.doc.data());
+        } catch (e) {
+          console.error('[Shared] expense mirror failed:', e.message);
+        }
+      });
+      if (snap.docChanges().length && notify) notify('expenses');
+    },
+    (err) => console.error('[Shared] expenses listener error:', err.message)
+  );
+
+  // Bills raised on ANOTHER desktop. Desktop-created bills are not uploaded to
+  // bills_inbox (that mailbox is consumed and deleted by whichever desktop sees
+  // it first, which would race between two desktops). They are published here
+  // instead, as durable records every desktop mirrors into its own archive.
+  onSnapshot(
+    collection(fs, 'desk_bills'),
+    (snap) => {
+      snap.docChanges().forEach((change) => {
+        if (change.type === 'removed') return;
+        const bill = change.doc.data();
+        // Skip our own writes — already in this SQLite file.
+        if (bill.recordedByDesk === deskId) return;
+        try {
+          db.addBill(bill);
+        } catch (e) {
+          console.error('[Shared] desk bill mirror failed:', e.message);
+        }
+      });
+      if (snap.docChanges().length && notify) notify('bills');
+    },
+    (err) => console.error('[Shared] desk_bills listener error:', err.message)
+  );
 }
+
+// Identifies this particular desktop, so shared records it wrote can be told
+// apart from ones another desktop wrote.
+let deskId = null;
+function setDeskId(id) { deskId = id; }
 
 let deviceCache = [];
 
@@ -110,6 +156,51 @@ async function addCustomerStats(id, weight, amount) {
     }
   }
   return updated;
+}
+
+// ── Expenses ───────────────────────────────────────────────────────────────
+
+async function saveExpense(expense) {
+  const record = {
+    ...expense,
+    updatedAt: Date.now(),
+    createdAt: expense.createdAt || Date.now(),
+    recordedBy: expense.recordedBy || deskId,
+  };
+  const saved = db.upsertExpense(record);
+  if (fs) {
+    try {
+      await setDoc(doc(fs, 'expenses', record.id), record);
+    } catch (e) {
+      console.warn('[Shared] expense publish failed:', e.message);
+    }
+  }
+  return saved;
+}
+
+async function removeExpense(id) {
+  db.deleteExpense(id);
+  if (fs) {
+    try { await deleteDoc(doc(fs, 'expenses', id)); } catch (e) {}
+  }
+}
+
+/**
+ * Publish a bill this desktop just created so other desktops mirror it.
+ * Phones do not read this collection — they use bills_inbox in the other
+ * direction and pull bills on demand via search.
+ */
+async function publishDeskBill(bill) {
+  if (!fs) return;
+  try {
+    await setDoc(doc(fs, 'desk_bills', bill.billId || bill.id), {
+      ...bill,
+      recordedByDesk: deskId,
+      publishedAt: Date.now(),
+    });
+  } catch (e) {
+    console.warn('[Shared] desk bill publish failed:', e.message);
+  }
 }
 
 // ── Devices ────────────────────────────────────────────────────────────────
@@ -175,23 +266,40 @@ async function seedPricingIfAbsent() {
   return true;
 }
 
-/** Register the desktop itself so it appears in the device list. */
-async function registerDesktop() {
-  if (!fs) return;
-  const ref = doc(fs, 'devices', 'desktop');
+/**
+ * Register this desktop so it appears in the device list.
+ *
+ * Keyed on a stable per-machine id rather than the literal "desktop", because a
+ * shop can run more than one Command Center and they must not overwrite each
+ * other's registry entry.
+ */
+async function registerDesktop(machineId, machineName) {
+  setDeskId(machineId);
+  if (!fs) return machineId;
+  const ref = doc(fs, 'devices', machineId);
   const existing = await getDoc(ref);
-  const payload = { deviceId: 'desktop', platform: 'desktop', lastSeen: Date.now(), isDesktop: true };
+  const payload = {
+    deviceId: machineId,
+    platform: 'desktop',
+    lastSeen: Date.now(),
+    isDesktop: true,
+  };
   if (!existing.exists()) {
-    payload.name = 'Command Center';
+    payload.name = machineName || 'Command Center';
     payload.canCustomize = true;
     payload.registeredAt = Date.now();
   }
   await setDoc(ref, payload, { merge: true });
+  return machineId;
 }
 
 module.exports = {
   init,
+  setDeskId,
   seedPricingIfAbsent,
+  saveExpense,
+  removeExpense,
+  publishDeskBill,
   getPricing,
   savePricing,
   saveCustomer,

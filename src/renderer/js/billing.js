@@ -80,8 +80,8 @@
             const rate = pricingFor(currentCategory()).kgRates?.[key];
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = 'service-btn' + (draft.serviceType === key ? ' active' : '');
-            btn.innerHTML = `<span class="svc-icon">${svc.icon}</span><span>${esc(svc.label)}</span>` +
+            btn.className = 'service-card' + (draft.serviceType === key ? ' active' : '');
+            btn.innerHTML = `<span class="ico">${svc.icon}</span><span>${esc(svc.label)}</span>` +
                 (rate ? `<small>₹${rate}/kg</small>` : '<small>per piece</small>');
             btn.onclick = () => {
                 draft.serviceType = key;
@@ -96,7 +96,7 @@
 
     function renderModes() {
         const ironOnly = draft.serviceType === 'IRON_STEAM';
-        document.querySelectorAll('#bill-mode-row .seg-btn').forEach((btn) => {
+        document.querySelectorAll('#bill-mode-row .seg').forEach((btn) => {
             const mode = btn.dataset.mode;
             btn.classList.toggle('active', draft.mode === mode);
             btn.disabled = ironOnly && mode === 'kg';
@@ -136,7 +136,7 @@
         const names = Object.keys(rates);
 
         if (names.length === 0) {
-            picker.innerHTML = '<p class="help-text">No per-piece prices set for this service. Add them under Settings.</p>';
+            picker.innerHTML = '<p class="help">No per-piece prices set for this service. Add them under Settings.</p>';
             return;
         }
 
@@ -157,26 +157,26 @@
         });
 
         const total = document.createElement('p');
-        total.className = 'rate-hint';
+        total.className = 'hint';
         total.textContent = `Subtotal: ${formatCurrency(currentSubtotal())}`;
         picker.appendChild(total);
     }
 
     function counterRow(label, count, rate, onChange) {
         const row = document.createElement('div');
-        row.className = 'counter-row' + (count > 0 ? ' has-count' : '');
+        row.className = 'count-row' + (count > 0 ? ' on' : '');
         const priceTag = rate ? `<small>₹${rate}</small>` : '';
-        row.innerHTML = `<span class="counter-label">${esc(label)} ${priceTag}</span>`;
+        row.innerHTML = `<span class="count-name">${esc(label)} ${priceTag}</span>`;
 
         const controls = document.createElement('div');
-        controls.className = 'counter-controls';
+        controls.className = 'counter';
         const minus = document.createElement('button');
-        minus.type = 'button'; minus.className = 'counter-btn'; minus.textContent = '−';
+        minus.type = 'button'; minus.className = ''; minus.textContent = '−';
         minus.onclick = () => onChange(count - 1);
         const value = document.createElement('span');
-        value.className = 'counter-value'; value.textContent = count;
+        value.className = 'val'; value.textContent = count;
         const plus = document.createElement('button');
-        plus.type = 'button'; plus.className = 'counter-btn'; plus.textContent = '+';
+        plus.type = 'button'; plus.className = ''; plus.textContent = '+';
         plus.onclick = () => onChange(count + 1);
         controls.append(minus, value, plus);
         row.appendChild(controls);
@@ -188,12 +188,12 @@
         list.innerHTML = '';
 
         if (draft.cart.length === 0) {
-            list.innerHTML = '<p class="help-text">Nothing added yet. Build a service above and add it to the cart.</p>';
+            list.innerHTML = '<p class="help">Nothing added yet. Build a service above and add it to the cart.</p>';
         }
 
         draft.cart.forEach((item, index) => {
             const card = document.createElement('div');
-            card.className = 'cart-card';
+            card.className = 'cart-item';
             const label = SERVICE_TYPES[item.serviceType]?.label || item.serviceType;
             const detail = item.isPiecewise
                 ? item.items.map((i) => `${esc(i.label)} ×${i.count}`).join(', ')
@@ -201,7 +201,7 @@
             card.innerHTML = `
                 <div>
                     <strong>${esc(label)}</strong>
-                    <p class="cart-detail">${detail || '—'}</p>
+                    <p class="detail">${detail || '—'}</p>
                 </div>
                 <div class="cart-right">
                     <span>${formatCurrency(item.subtotal)}</span>
@@ -237,11 +237,11 @@
 
         box.innerHTML = '';
         if (matches.length === 0) {
-            box.innerHTML = '<p class="help-text">No match. Add the customer from the Customers tab first.</p>';
+            box.innerHTML = '<p class="help">No match. Add the customer from the Customers tab first.</p>';
         }
         matches.forEach((c) => {
             const row = document.createElement('button');
-            row.type = 'button'; row.className = 'result-row';
+            row.type = 'button'; row.className = 'result-item';
             row.innerHTML = `<strong>${esc(c.name)}</strong><span>${esc(c.mobile)} · ${esc(c.category)}</span>`;
             row.onclick = () => selectCustomer(c);
             box.appendChild(row);
@@ -331,12 +331,12 @@
 
     function showConfirmation(bill) {
         $('confirm-body').innerHTML = `
-            <div class="confirm-row"><span>Bill No</span><strong>${esc(bill.id)}</strong></div>
-            <div class="confirm-row"><span>Customer</span><strong>${esc(bill.customerName)}</strong></div>
-            <div class="confirm-row"><span>Items</span><strong>${bill.totalClothesCount}</strong></div>
-            <div class="confirm-row"><span>Weight</span><strong>${bill.totalWeight} kg</strong></div>
-            <div class="confirm-row grand"><span>Total</span><strong>${formatCurrency(bill.totalAmount)}</strong></div>
-            <p class="help-text">The receipt below opens in WhatsApp, identical to what the phones send.</p>`;
+            <div class="kv"><span>Bill No</span><strong>${esc(bill.id)}</strong></div>
+            <div class="kv"><span>Customer</span><strong>${esc(bill.customerName)}</strong></div>
+            <div class="kv"><span>Items</span><strong>${bill.totalClothesCount}</strong></div>
+            <div class="kv"><span>Weight</span><strong>${bill.totalWeight} kg</strong></div>
+            <div class="kv grand"><span>Total</span><strong>${formatCurrency(bill.totalAmount)}</strong></div>
+            <p class="help">The receipt below opens in WhatsApp, identical to what the phones send.</p>`;
         $('confirm-modal').classList.remove('hidden');
     }
 
@@ -348,7 +348,8 @@
     }
 
     function bind() {
-        $('btn-new-order').onclick = open;
+        // The "+ New Bill" button lives in the top bar and is wired by app.js,
+        // which swaps its action per tab.
         $('btn-cancel-order').onclick = close;
         $('btn-add-to-cart').onclick = addToCart;
         $('btn-generate-bill').onclick = generateBill;

@@ -11,10 +11,10 @@
     const { $, esc, call } = window.App;
     const { formatCurrency, SERVICE_TYPES } = window.Fmt;
 
-    // Validated against the dark surface #1e293b (lightness band, chroma floor,
-    // CVD separation, normal-vision floor, contrast — all pass).
-    const SERIES = '#3987e5';
-    const GRID = 'rgba(255,255,255,0.08)';
+    // Single-series charts, so identity comes from the axis labels rather than
+    // colour. This blue clears 3:1 contrast against the light card surface.
+    const SERIES = '#2563eb';
+    const GRID = '#e6eaf3';
     const AXIS_TEXT = '#94a3b8';
 
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -32,19 +32,19 @@
         const stats = await call(window.api.getRevenueStats({ mode, count }), null);
         const host = $('revenue-body');
         if (!stats) {
-            host.innerHTML = '<p class="help-text">Could not load revenue data.</p>';
+            host.innerHTML = '<p class="help">Could not load revenue data.</p>';
             return;
         }
 
         host.innerHTML = `
-            <div class="metrics-grid">
+            <div class="stat-grid">
                 ${tile('Revenue — All Time', formatCurrency(stats.totalRevenue), 'good')}
                 ${tile(`Revenue — ${titleCase(WINDOW_LABEL())}`, formatCurrency(stats.windowRevenue), '')}
                 ${tile('Awaiting Payment', formatCurrency(stats.pendingValue), 'warn')}
                 ${tile('Pending Bills', stats.pendingCount, '')}
             </div>
 
-            <div class="glass card-pad chart-card">
+            <div class="card card-pad chart-card">
                 <h3 class="chart-title">Revenue collected — ${esc(WINDOW_LABEL())}</h3>
                 <p class="chart-sub">
                     From ${stats.collectedCount} paid bill${stats.collectedCount === 1 ? '' : 's'}.
@@ -54,12 +54,12 @@
             </div>
 
             <div class="chart-row">
-                <div class="glass card-pad chart-card">
+                <div class="card card-pad chart-card">
                     <h3 class="chart-title">By customer category</h3>
                     <p class="chart-sub">All time</p>
                     ${breakdown(stats.byCategory, (d) => d.name)}
                 </div>
-                <div class="glass card-pad chart-card">
+                <div class="card card-pad chart-card">
                     <h3 class="chart-title">By service</h3>
                     <p class="chart-sub">All time</p>
                     ${breakdown(stats.byService, (d) => SERVICE_TYPES[d.name]?.label || d.name)}
@@ -72,16 +72,19 @@
     function titleCase(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
     function tile(label, value, tone) {
-        return `<div class="metric-card glass">
-            <p class="label">${esc(label)}</p>
-            <p class="value ${tone ? 'tone-' + tone : ''}">${esc(value)}</p>
+        return `<div class="stat">
+            <div class="stat-icon ${tone === 'good' ? 'green' : tone === 'warn' ? 'amber' : ''}">${window.App.icon(tone === 'warn' ? 'clock' : 'trend')}</div>
+            <div class="stat-body">
+                <div class="stat-value">${esc(value)}</div>
+                <div class="stat-label">${esc(label)}</div>
+            </div>
         </div>`;
     }
 
     // ── Time series: vertical bars ─────────────────────────────────────────
 
     function series(rows) {
-        if (!rows.length) return '<p class="help-text">No data yet.</p>';
+        if (!rows.length) return '<p class="help">No data yet.</p>';
 
         const W = 900, H = 240;
         const padL = 64, padR = 16, padT = 16, padB = 34;
@@ -129,22 +132,22 @@
                 ${gridLines}${yLabels}${bars}${xLabels}
                 <line x1="${padL}" y1="${padT + plotH}" x2="${W - padR}" y2="${padT + plotH}" stroke="${GRID}" stroke-width="1"/>
             </svg>
-            <div class="chart-tooltip hidden" id="chart-tooltip"></div>
+            <div class="tooltip hidden" id="chart-tooltip"></div>
         </div>`;
     }
 
     // ── Breakdown: horizontal bars with direct labels ──────────────────────
 
     function breakdown(rows, labelFn) {
-        if (!rows.length) return '<p class="help-text">No paid bills yet.</p>';
+        if (!rows.length) return '<p class="help">No paid bills yet.</p>';
         const max = Math.max(...rows.map((r) => r.revenue), 1);
 
-        return '<div class="hbar-list">' + rows.map((r) => {
+        return '<div class="hbars">' + rows.map((r) => {
             const pct = Math.max(1, (r.revenue / max) * 100);
-            return `<div class="hbar-row">
-                <span class="hbar-label">${esc(labelFn(r))}</span>
+            return `<div class="hbar">
+                <span class="hbar-name">${esc(labelFn(r))}</span>
                 <span class="hbar-track"><span class="hbar-fill" style="width:${pct}%;background:${SERIES}"></span></span>
-                <span class="hbar-value">${esc(formatCurrency(r.revenue))}</span>
+                <span class="hbar-val">${esc(formatCurrency(r.revenue))}</span>
             </div>`;
         }).join('') + '</div>';
     }

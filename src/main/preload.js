@@ -27,9 +27,17 @@ contextBridge.exposeInMainWorld('api', {
   // Reporting
   getRevenueStats: (opts) => ipcRenderer.invoke('stats:revenue', opts),
 
+  // Expenses & finance
+  listExpenses: () => ipcRenderer.invoke('expenses:list'),
+  expenseCategories: () => ipcRenderer.invoke('expenses:categories'),
+  saveExpense: (expense) => ipcRenderer.invoke('expenses:save', expense),
+  deleteExpense: (id) => ipcRenderer.invoke('expenses:delete', id),
+  getFinanceStats: (opts) => ipcRenderer.invoke('stats:finance', opts),
+
   // Storage location
   getStorageInfo: () => ipcRenderer.invoke('storage:get'),
   chooseStorage: () => ipcRenderer.invoke('storage:choose'),
+  useOneDrive: () => ipcRenderer.invoke('storage:useOneDrive'),
 
   // WhatsApp
   sendWhatsApp: (mobile, message) => ipcRenderer.invoke('app:sendWhatsApp', { mobile, message }),

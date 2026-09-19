@@ -18,7 +18,7 @@
     }
 
     function render() {
-        const tbody = $('customers-tbody');
+        const tbody = $('customers-body');
         const rows = visibleCustomers();
         tbody.innerHTML = '';
         $('customers-empty').classList.toggle('hidden', rows.length > 0);
@@ -28,15 +28,15 @@
             tr.innerHTML = `
                 <td>${esc(c.name)}</td>
                 <td>${esc(c.mobile)}</td>
-                <td><span class="chip">${esc(c.category || 'Student')}</span></td>
+                <td><span class="badge neutral">${esc(c.category || 'Student')}</span></td>
                 <td>${(c.totalWeight || 0).toFixed(1)} kg</td>
                 <td>${formatCurrency(c.totalAmountPaid || 0)}</td>`;
 
             const actions = document.createElement('td');
-            actions.className = 'actions-col';
+            actions.className = 'col-actions';
 
             const edit = document.createElement('button');
-            edit.className = 'btn tiny secondary';
+            edit.className = 'btn tiny ghost';
             edit.textContent = 'Edit';
             edit.onclick = () => openModal(c);
 
@@ -115,7 +115,6 @@
     }
 
     function bind() {
-        $('btn-new-customer').onclick = () => openModal(null);
         $('btn-cancel-customer').onclick = closeModal;
         $('customer-form').onsubmit = save;
         $('customer-search').oninput = (e) => { searchQuery = e.target.value; render(); };
@@ -124,5 +123,5 @@
         };
     }
 
-    window.Customers = { bind, render };
+    window.Customers = { bind, render, openModal: () => openModal(null) };
 })();

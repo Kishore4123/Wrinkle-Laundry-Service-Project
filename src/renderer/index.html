@@ -3,118 +3,136 @@
 <head>
     <meta charset="UTF-8">
     <title>Wrinkle Laundry Command Center</title>
-    <link rel="stylesheet" href="styles/main.css">
-    <link rel="stylesheet" href="styles/tabs.css">
+    <link rel="stylesheet" href="styles/app.css">
 </head>
 <body>
-<div class="app-container">
+<div class="shell">
 
-    <header class="top-nav">
+    <!-- ── Sidebar ─────────────────────────────────────────────────── -->
+    <aside class="sidebar" id="sidebar">
         <div class="brand">
-            <span id="brand-text-logo" style="font-weight:800;color:var(--accent-primary);font-size:1.5rem;letter-spacing:-0.5px;">Wrinkle Release</span>
-            <h1>Command Center</h1>
+            <div class="brand-mark">WR</div>
+            <div class="brand-text">
+                <strong>Wrinkle Release</strong>
+                <span>Command Center</span>
+            </div>
+            <button class="collapse-btn" id="btn-collapse" title="Collapse sidebar">&laquo;</button>
         </div>
-        <div class="controls">
-            <div class="status-pill offline" id="connection-status">
-                <span class="indicator"></span>
-                <span class="text">Connecting...</span>
-            </div>
+
+        <nav class="nav" id="nav">
+            <button class="nav-item active" data-tab="bills">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>
+                <span class="nav-label">Bills</span>
+            </button>
+            <button class="nav-item" data-tab="customers">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>
+                <span class="nav-label">Customers</span>
+            </button>
+            <button class="nav-item" data-tab="expenses">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></svg>
+                <span class="nav-label">Expenses</span>
+            </button>
+            <button class="nav-item" data-tab="revenue">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>
+                <span class="nav-label">Revenue</span>
+            </button>
+            <button class="nav-item" data-tab="finance">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                <span class="nav-label">Finance</span>
+            </button>
+            <button class="nav-item" data-tab="settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span class="nav-label">Settings</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-foot">
+            <i class="dot" id="conn-dot"></i>
+            <span id="conn-text">Connecting...</span>
         </div>
-    </header>
+    </aside>
 
-    <nav class="tab-bar" id="tab-bar">
-        <button class="tab-btn active" data-tab="bills">Bills</button>
-        <button class="tab-btn" data-tab="customers">Customers</button>
-        <button class="tab-btn" data-tab="revenue">Revenue</button>
-        <button class="tab-btn" data-tab="settings">Settings &amp; Devices</button>
-    </nav>
-
-    <main class="tab-content">
-
-        <!-- ── Bills ───────────────────────────────────────────────── -->
-        <section class="tab-panel active" id="panel-bills">
-            <div class="metrics-grid">
-                <div class="metric-card glass">
-                    <p class="label">Revenue Collected</p>
-                    <p class="value" id="metric-revenue">₹0</p>
-                </div>
-                <div class="metric-card glass">
-                    <p class="label">Active Orders</p>
-                    <p class="value" id="metric-active">0</p>
-                </div>
-                <div class="metric-card glass">
-                    <p class="label">Completed</p>
-                    <p class="value" id="metric-completed">0</p>
-                </div>
-                <div class="metric-card glass">
-                    <p class="label">Cloud Sync</p>
-                    <p class="value sync-offline" id="metric-sync">Offline</p>
-                </div>
+    <!-- ── Main ────────────────────────────────────────────────────── -->
+    <div class="main">
+        <header class="topbar">
+            <h1 id="page-title">Bills</h1>
+            <div class="pill-row" id="bill-pills">
+                <button class="pill-btn active" data-filter="all">All</button>
+                <button class="pill-btn" data-filter="Pending">Pending <span class="pill-count" id="count-pending">0</span></button>
+                <button class="pill-btn" data-filter="Completed">Completed <span class="pill-count" id="count-completed">0</span></button>
             </div>
+            <div class="topbar-spacer"></div>
+            <button class="btn primary" id="btn-primary-action">+ New Bill</button>
+        </header>
 
-            <div class="panel-toolbar">
-                <input type="text" id="search-input" class="search-input" placeholder="Search by name, phone or bill number...">
-                <div class="toolbar-actions">
-                    <select id="bill-filter" class="select-input">
-                        <option value="all">All bills</option>
-                        <option value="Pending">Pending only</option>
-                        <option value="Completed">Completed only</option>
-                    </select>
-                    <button class="btn primary" id="btn-new-order">+ New Bill</button>
+        <main class="content">
+
+            <!-- Bills -->
+            <section class="panel active" id="panel-bills">
+                <div class="stat-grid" id="bill-stats"></div>
+                <div class="toolbar">
+                    <input type="text" id="bill-search" class="input grow" placeholder="Search by name, phone or bill number...">
                 </div>
-            </div>
-
-            <div class="table-wrapper glass">
-                <table class="data-table">
-                    <thead>
-                    <tr>
-                        <th>Bill No</th>
-                        <th>Customer</th>
-                        <th>Phone</th>
-                        <th>Amount</th>
-                        <th>Date</th>
-                        <th>Status</th>
-                        <th class="actions-col">Actions</th>
-                    </tr>
-                    </thead>
-                    <tbody id="orders-tbody"></tbody>
-                </table>
-                <div class="empty-state hidden" id="bills-empty">No bills yet. Create one or wait for a phone to sync.</div>
-            </div>
-        </section>
-
-        <!-- ── Customers ───────────────────────────────────────────── -->
-        <section class="tab-panel" id="panel-customers">
-            <div class="panel-toolbar">
-                <input type="text" id="customer-search" class="search-input" placeholder="Search customers by name, phone or category...">
-                <div class="toolbar-actions">
-                    <button class="btn primary" id="btn-new-customer">+ Add Customer</button>
+                <div class="card">
+                    <div class="table-wrap">
+                        <table class="data">
+                            <thead><tr>
+                                <th>Bill No</th><th>Customer</th><th>Phone</th><th>Amount</th>
+                                <th>Date</th><th>Status</th><th class="col-actions">Actions</th>
+                            </tr></thead>
+                            <tbody id="bills-body"></tbody>
+                        </table>
+                        <div class="empty hidden" id="bills-empty">No bills yet. Create one, or wait for a phone to sync.</div>
+                    </div>
                 </div>
-            </div>
-            <div class="table-wrapper glass">
-                <table class="data-table">
-                    <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Phone</th>
-                        <th>Category</th>
-                        <th>Total Weight</th>
-                        <th>Lifetime Paid</th>
-                        <th class="actions-col">Actions</th>
-                    </tr>
-                    </thead>
-                    <tbody id="customers-tbody"></tbody>
-                </table>
-                <div class="empty-state hidden" id="customers-empty">No customers yet. Add one, or they'll appear as phones sync.</div>
-            </div>
-        </section>
+            </section>
 
-        <!-- ── Revenue ─────────────────────────────────────────────── -->
-        <section class="tab-panel" id="panel-revenue">
-            <div class="panel-toolbar">
-                <h2 class="panel-title">Revenue Dashboard</h2>
-                <div class="toolbar-actions">
-                    <select id="revenue-range" class="select-input">
+            <!-- Customers -->
+            <section class="panel" id="panel-customers">
+                <div class="toolbar">
+                    <input type="text" id="customer-search" class="input grow" placeholder="Search customers by name, phone or category...">
+                </div>
+                <div class="card">
+                    <div class="table-wrap">
+                        <table class="data">
+                            <thead><tr>
+                                <th>Name</th><th>Phone</th><th>Category</th>
+                                <th>Total Weight</th><th>Lifetime Paid</th><th class="col-actions">Actions</th>
+                            </tr></thead>
+                            <tbody id="customers-body"></tbody>
+                        </table>
+                        <div class="empty hidden" id="customers-empty">No customers yet. Add one, or they'll appear as phones sync.</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Expenses -->
+            <section class="panel" id="panel-expenses">
+                <div class="stat-grid" id="expense-stats"></div>
+                <div class="toolbar">
+                    <input type="text" id="expense-search" class="input grow" placeholder="Search expenses by title, category or note...">
+                    <select id="expense-filter" class="select"><option value="all">All categories</option></select>
+                </div>
+                <div class="card">
+                    <div class="table-wrap">
+                        <table class="data">
+                            <thead><tr>
+                                <th>Date</th><th>Title</th><th>Category</th>
+                                <th>Amount</th><th>Note</th><th class="col-actions">Actions</th>
+                            </tr></thead>
+                            <tbody id="expenses-body"></tbody>
+                        </table>
+                        <div class="empty hidden" id="expenses-empty">No expenses recorded yet.</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Revenue -->
+            <section class="panel" id="panel-revenue">
+                <div class="toolbar">
+                    <span class="toolbar-title">Revenue</span>
+                    <div class="spacer"></div>
+                    <select id="revenue-range" class="select">
                         <option value="days:7">Last 7 days</option>
                         <option value="days:30" selected>Last 30 days</option>
                         <option value="days:90">Last 90 days</option>
@@ -123,117 +141,165 @@
                         <option value="years:5">Year-wise (5 years)</option>
                     </select>
                 </div>
-            </div>
-            <div id="revenue-body"></div>
-        </section>
+                <div id="revenue-body"></div>
+            </section>
 
-        <!-- ── Settings & Devices ──────────────────────────────────── -->
-        <section class="tab-panel" id="panel-settings">
-            <div class="settings-layout">
-                <div class="settings-col">
-                    <h2 class="panel-title">Pricing</h2>
-                    <div class="glass card-pad">
-                        <div class="category-row" id="category-pills"></div>
-                        <div class="inline-form" id="add-category-form">
-                            <input type="text" id="new-category-name" class="search-input" placeholder="New category name">
-                            <button class="btn secondary" id="btn-add-category">Add Category</button>
+            <!-- Finance -->
+            <section class="panel" id="panel-finance">
+                <div class="toolbar">
+                    <span class="toolbar-title">Profit &amp; Loss</span>
+                    <div class="spacer"></div>
+                    <select id="finance-range" class="select">
+                        <option value="days:30">Last 30 days</option>
+                        <option value="months:6">Last 6 months</option>
+                        <option value="months:12" selected>Month-wise (12 months)</option>
+                        <option value="years:5">Year-wise (5 years)</option>
+                    </select>
+                </div>
+                <div id="finance-body"></div>
+            </section>
+
+            <!-- Settings -->
+            <section class="panel" id="panel-settings">
+                <div class="two-col">
+                    <div>
+                        <h3 class="section-title">Pricing</h3>
+                        <div class="card card-pad">
+                            <div class="chip-row" id="category-chips"></div>
+                            <div class="inline-form">
+                                <input type="text" id="new-category" class="input grow" placeholder="New category name">
+                                <button class="btn ghost" id="btn-add-category">Add Category</button>
+                            </div>
+                            <div id="pricing-editor"></div>
+                            <button class="btn primary block" id="btn-save-pricing">Save Pricing</button>
                         </div>
-                        <div id="pricing-editor"></div>
-                        <button class="btn primary full-width" id="btn-save-pricing">Save Pricing</button>
-                    </div>
-                </div>
-                <div class="settings-col">
-                    <h2 class="panel-title">Storage Location</h2>
-                    <div class="glass card-pad">
-                        <p class="help-text">
-                            Where this computer keeps its bill archive. Choosing a new folder
-                            creates a <strong>WrinkleLaundry</strong> folder inside it and moves
-                            the data across.
-                        </p>
-                        <div class="storage-path" id="storage-path">Loading...</div>
-                        <button class="btn secondary full-width" id="btn-choose-storage">Change Folder</button>
                     </div>
 
-                    <h2 class="panel-title" style="margin-top:1.5rem;">Device Control</h2>
-                    <div class="glass card-pad">
-                        <p class="help-text">
-                            Devices appear here once they connect. Turn on <strong>Can edit pricing</strong>
-                            to let that phone change categories, items and prices.
-                        </p>
-                        <div id="devices-list"></div>
+                    <div class="stack">
+                        <div>
+                            <h3 class="section-title">Data Storage</h3>
+                            <div class="card card-pad">
+                                <p class="help">
+                                    Where this computer keeps its archive. Choosing a folder creates a
+                                    <strong>WrinkleLaundry</strong> folder inside it and moves the data across.
+                                </p>
+                                <div class="path-box" id="storage-path">Loading...</div>
+                                <div class="inline-form">
+                                    <button class="btn ghost" id="btn-onedrive">Store in OneDrive</button>
+                                    <button class="btn ghost" id="btn-choose-storage">Choose Folder</button>
+                                </div>
+                                <p class="help" id="onedrive-note"></p>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 class="section-title">Device Control</h3>
+                            <div class="card card-pad">
+                                <p class="help">
+                                    Devices appear here once they connect. Turn on <strong>Can edit pricing</strong>
+                                    to let that phone change categories, items and prices.
+                                </p>
+                                <div id="devices-list"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </section>
+            </section>
 
-    </main>
+        </main>
+    </div>
 </div>
 
-<!-- ── New / Edit Customer Modal ──────────────────────────────────── -->
-<div class="modal-overlay hidden" id="customer-modal">
-    <div class="modal-content glass">
+<!-- ── Customer modal ──────────────────────────────────────────────── -->
+<div class="overlay hidden" id="customer-modal">
+    <div class="modal">
         <h2 id="customer-modal-title">Add Customer</h2>
         <form id="customer-form">
             <input type="hidden" id="customer-id">
-            <label>Name</label>
-            <input type="text" id="customer-name" required>
-            <label>Mobile (10 digits)</label>
-            <input type="text" id="customer-mobile" maxlength="10" required>
-            <label>Category</label>
-            <select id="customer-category"></select>
+            <div class="field-row one">
+                <div><label class="field">Name</label><input type="text" id="customer-name" class="input" required></div>
+            </div>
+            <div class="field-row">
+                <div><label class="field">Mobile (10 digits)</label><input type="text" id="customer-mobile" class="input" maxlength="10" required></div>
+                <div><label class="field">Category</label><select id="customer-category" class="select"></select></div>
+            </div>
             <div class="modal-actions">
-                <button type="button" class="btn secondary" id="btn-cancel-customer">Cancel</button>
+                <button type="button" class="btn ghost" id="btn-cancel-customer">Cancel</button>
                 <button type="submit" class="btn primary">Save</button>
             </div>
         </form>
     </div>
 </div>
 
-<!-- ── New Bill Modal (mirrors the mobile cart flow) ──────────────── -->
-<div class="modal-overlay hidden" id="order-modal">
-    <div class="modal-content glass wide">
+<!-- ── Expense modal ───────────────────────────────────────────────── -->
+<div class="overlay hidden" id="expense-modal">
+    <div class="modal">
+        <h2 id="expense-modal-title">Add Expense</h2>
+        <form id="expense-form">
+            <input type="hidden" id="expense-id">
+            <div class="field-row">
+                <div><label class="field">Title</label><input type="text" id="expense-title" class="input" placeholder="e.g. Monthly rent" required></div>
+                <div><label class="field">Amount</label><input type="text" id="expense-amount" class="input" placeholder="0" required></div>
+            </div>
+            <div class="field-row">
+                <div><label class="field">Category</label><select id="expense-category" class="select"></select></div>
+                <div><label class="field">Date</label><input type="date" id="expense-date" class="input"></div>
+            </div>
+            <div class="field-row one">
+                <div><label class="field">Note (optional)</label><input type="text" id="expense-note" class="input" placeholder="Anything worth remembering"></div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn ghost" id="btn-cancel-expense">Cancel</button>
+                <button type="submit" class="btn primary">Save Expense</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── New bill modal ──────────────────────────────────────────────── -->
+<div class="overlay hidden" id="order-modal">
+    <div class="modal wide">
         <h2>Create New Bill</h2>
-
         <div class="bill-grid">
-            <div class="bill-left">
-                <label>Customer</label>
-                <input type="text" id="bill-customer-search" placeholder="Search customer by name or phone...">
-                <div class="search-results hidden" id="bill-customer-results"></div>
-                <div class="selected-customer hidden" id="bill-selected-customer"></div>
+            <div class="bill-col">
+                <label class="field">Customer</label>
+                <input type="text" id="bill-customer-search" class="input" placeholder="Search customer by name or phone...">
+                <div class="result-list hidden" id="bill-customer-results"></div>
+                <div class="picked hidden" id="bill-selected-customer"></div>
 
-                <label>Service</label>
+                <label class="field">Service</label>
                 <div class="service-row" id="bill-service-row"></div>
 
-                <label>Billing Mode</label>
+                <label class="field">Billing Mode</label>
                 <div class="segmented" id="bill-mode-row">
-                    <button type="button" class="seg-btn active" data-mode="kg">Per Kg</button>
-                    <button type="button" class="seg-btn" data-mode="piece">Per Piece</button>
+                    <button type="button" class="seg active" data-mode="kg">Per Kg</button>
+                    <button type="button" class="seg" data-mode="piece">Per Piece</button>
                 </div>
 
                 <div id="bill-kg-section">
-                    <label>Weight (kg)</label>
-                    <input type="text" id="bill-weight" placeholder="e.g. 3.5">
-                    <p class="rate-hint" id="bill-rate-hint"></p>
-                    <label>Garments (optional breakdown)</label>
-                    <div class="item-picker" id="bill-clothing-picker"></div>
+                    <label class="field">Weight (kg)</label>
+                    <input type="text" id="bill-weight" class="input" placeholder="e.g. 3.5">
+                    <p class="hint" id="bill-rate-hint"></p>
+                    <label class="field">Garments (optional breakdown)</label>
+                    <div class="picker" id="bill-clothing-picker"></div>
                 </div>
 
                 <div id="bill-piece-section" class="hidden">
-                    <label>Items</label>
-                    <div class="item-picker" id="bill-piece-picker"></div>
+                    <label class="field">Items</label>
+                    <div class="picker" id="bill-piece-picker"></div>
                 </div>
 
-                <button type="button" class="btn secondary full-width" id="btn-add-to-cart">Add to Cart</button>
+                <button type="button" class="btn ghost block" id="btn-add-to-cart">Add to Cart</button>
             </div>
 
-            <div class="bill-right">
-                <label>Cart</label>
-                <div class="cart-list" id="bill-cart"></div>
-                <div class="cart-summary" id="bill-cart-summary"></div>
-                <label>Due Date (optional)</label>
-                <input type="date" id="bill-due-date">
+            <div class="bill-col">
+                <label class="field">Cart</label>
+                <div class="cart" id="bill-cart"></div>
+                <div class="totals" id="bill-cart-summary"></div>
+                <label class="field">Due Date (optional)</label>
+                <input type="date" id="bill-due-date" class="input">
                 <div class="modal-actions">
-                    <button type="button" class="btn secondary" id="btn-cancel-order">Cancel</button>
+                    <button type="button" class="btn ghost" id="btn-cancel-order">Cancel</button>
                     <button type="button" class="btn primary" id="btn-generate-bill">Generate Bill</button>
                 </div>
             </div>
@@ -241,13 +307,13 @@
     </div>
 </div>
 
-<!-- ── Bill Confirmation ──────────────────────────────────────────── -->
-<div class="modal-overlay hidden" id="confirm-modal">
-    <div class="modal-content glass">
+<!-- ── Bill confirmation ───────────────────────────────────────────── -->
+<div class="overlay hidden" id="confirm-modal">
+    <div class="modal">
         <h2>Bill Created</h2>
         <div id="confirm-body"></div>
         <div class="modal-actions">
-            <button type="button" class="btn secondary" id="btn-close-confirm">Close</button>
+            <button type="button" class="btn ghost" id="btn-close-confirm">Close</button>
             <button type="button" class="btn whatsapp" id="btn-send-whatsapp">Send on WhatsApp</button>
         </div>
     </div>
@@ -258,9 +324,11 @@
 <script src="js/format.js"></script>
 <script src="js/state.js"></script>
 <script src="js/customers.js"></script>
+<script src="js/expenses.js"></script>
 <script src="js/billing.js"></script>
 <script src="js/settings.js"></script>
 <script src="js/revenue.js"></script>
+<script src="js/finance.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

@@ -1,8 +1,14 @@
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, Menu } = require('electron');
+const os = require('os');
 const path = require('path');
+const fsx = require('fs');
 const db = require('./database');
 const shared = require('./shared');
 const { initSync, allocateBillNumber } = require('./sync');
+
+// No File/Edit/View/Window/Help bar — this is a point-of-sale app, not a
+// document editor, and the default menu just eats vertical space.
+Menu.setApplicationMenu(null);
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -20,10 +26,34 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 }
 
+/**
+ * A stable id for this computer, so several Command Centers in one shop stay
+ * distinguishable in the device registry and in shared records.
+ */
+function machineIdentity() {
+  const file = path.join(app.getPath('userData'), 'machine-id.json');
+  try {
+    const saved = JSON.parse(fsx.readFileSync(file, 'utf8'));
+    if (saved.id) return saved;
+  } catch (e) {
+    // First run on this machine.
+  }
+  const identity = {
+    id: `desk-${Math.random().toString(36).slice(2, 10)}`,
+    name: `Command Center (${os.hostname()})`,
+  };
+  try { fsx.writeFileSync(file, JSON.stringify(identity, null, 2)); } catch (e) {}
+  return identity;
+}
+
+const MACHINE = machineIdentity();
+
 app.whenReady().then(() => {
   createWindow();
 
   initSync({
+    machineId: MACHINE.id,
+    machineName: MACHINE.name,
     onChange: (topic) => {
       BrowserWindow.getAllWindows().forEach((w) =>
         w.webContents.send('sync:changed', topic || 'bills')
@@ -55,7 +85,13 @@ function handle(channel, fn) {
 // ── Bills ──────────────────────────────────────────────────────────────────
 
 handle('db:getBills', () => db.getBills());
-handle('db:addBill', (billData) => db.addBill(billData));
+handle('db:addBill', async (billData) => {
+  const billId = db.addBill(billData);
+  // Share it with any other Command Center in the shop. Phones are unaffected —
+  // they pull bills on demand via search.
+  await shared.publishDeskBill(billData).catch(() => {});
+  return billId;
+});
 handle('db:deleteBill', (billId) => { db.deleteBill(billId); });
 
 handle('db:updateBillStatus', async ({ id, status }) => {
@@ -104,9 +140,51 @@ handle('devices:forget', (deviceId) => shared.forgetDevice(deviceId));
 
 handle('stats:revenue', (opts) => db.getRevenueStats(opts || {}));
 
+// ── Expenses & finance ─────────────────────────────────────────────────────
+
+handle('expenses:list', () => db.getExpenses());
+handle('expenses:categories', () => db.expenseCategories());
+handle('expenses:save', (expense) => shared.saveExpense(expense));
+handle('expenses:delete', (id) => shared.removeExpense(id));
+handle('stats:finance', (opts) => db.getFinanceStats(opts || {}));
+
 // ── Storage location ───────────────────────────────────────────────────────
 
-handle('storage:get', () => db.getStorageInfo());
+handle('storage:get', () => ({
+  ...db.getStorageInfo(),
+  machine: MACHINE,
+  oneDrive: detectOneDrive(),
+}));
+
+/**
+ * Windows sets OneDrive/OneDriveConsumer/OneDriveCommercial when the client is
+ * installed and signed in. Returns null when OneDrive isn't set up, so the UI
+ * can hide the shortcut rather than offering a path that doesn't exist.
+ */
+function detectOneDrive() {
+  const candidates = [
+    process.env.OneDriveCommercial,
+    process.env.OneDriveConsumer,
+    process.env.OneDrive,
+    path.join(os.homedir(), 'OneDrive'),
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try {
+      if (fsx.existsSync(dir) && fsx.statSync(dir).isDirectory()) return dir;
+    } catch (e) {
+      // Unreadable candidate — try the next.
+    }
+  }
+  return null;
+}
+
+/** One-click equivalent of picking the OneDrive folder in the file dialog. */
+handle('storage:useOneDrive', () => {
+  const oneDrive = detectOneDrive();
+  if (!oneDrive) throw new Error('OneDrive does not appear to be set up on this computer.');
+  return db.relocateStorage(oneDrive);
+});
 
 /**
  * Ask the user for a folder, then move the data folder there. The dialog is

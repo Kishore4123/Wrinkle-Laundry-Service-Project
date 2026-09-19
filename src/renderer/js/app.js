@@ -1,12 +1,24 @@
-// app.js — shell: tab routing, the Bills tab, and live-sync wiring.
+// app.js — shell: sidebar routing, the Bills tab, and live-sync wiring.
 
 (function () {
-    const { State, $, esc, toast, call } = window.App;
+    const { State, $, esc, toast, call, icon } = window.App;
     const { formatCurrency, buildBillMessage, SERVICE_TYPES } = window.Fmt;
 
     let billSearch = '';
     let billFilter = 'all';
     let activeTab = 'bills';
+
+    // What the top-right button does on each tab. Tabs without an entry hide it.
+    const PRIMARY_ACTION = {
+        bills: { label: '+ New Bill', run: () => window.Billing.open() },
+        customers: { label: '+ Add Customer', run: () => window.Customers.openModal() },
+        expenses: { label: '+ Add Expense', run: () => window.Expenses.openModal() },
+    };
+
+    const TITLES = {
+        bills: 'Bills', customers: 'Customers', expenses: 'Expenses',
+        revenue: 'Revenue', finance: 'Finance', settings: 'Settings',
+    };
 
     // ── Bills tab ──────────────────────────────────────────────────────────
 
@@ -22,47 +34,39 @@
     }
 
     function renderBills() {
-        const tbody = $('orders-tbody');
+        const body = $('bills-body');
         const rows = visibleBills();
-        tbody.innerHTML = '';
+        body.innerHTML = '';
         $('bills-empty').classList.toggle('hidden', rows.length > 0);
 
         rows.forEach((bill) => {
             const status = bill.status || 'Pending';
-            const statusClass = status === 'Pending' ? 'status-pending' : 'status-completed';
-
-            let itemsStr = '';
             const cart = Array.isArray(bill.cartItems) ? bill.cartItems : [];
-            if (cart.length) {
-                itemsStr = cart.map((ci) => {
+            const summary = cart.length
+                ? cart.map((ci) => {
                     const svc = SERVICE_TYPES[ci.serviceType]?.label || ci.serviceType || 'Service';
                     return ci.weight ? `${svc} ${ci.weight}kg` : svc;
-                }).join(', ');
-            } else if (bill.items) {
-                itemsStr = Array.isArray(bill.items) ? bill.items.join(', ') : String(bill.items);
-            }
+                }).join(', ')
+                : (bill.customerCategory || '');
 
             const when = bill.createdAt ? new Date(bill.createdAt)
                 : bill.timestamp ? new Date(bill.timestamp) : null;
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${esc(bill.billId || '-')}</td>
-                <td>
-                    <div>${esc(bill.customerName || 'Unknown')}</div>
-                    <small class="muted">${esc(itemsStr || bill.customerCategory || '')}</small>
-                </td>
+                <td><strong>${esc(bill.billId || '-')}</strong></td>
+                <td>${esc(bill.customerName || 'Unknown')}<span class="cell-sub">${esc(summary)}</span></td>
                 <td>${esc(bill.phone || '-')}</td>
-                <td>${esc(formatCurrency(bill.totalAmount || 0))}</td>
-                <td><small>${when ? when.toLocaleString('en-IN') : '-'}</small></td>
-                <td><span class="status-badge ${statusClass}">${esc(status)}</span></td>`;
+                <td><strong>${esc(formatCurrency(bill.totalAmount || 0))}</strong></td>
+                <td>${when ? esc(when.toLocaleDateString('en-IN')) : '-'}<span class="cell-sub">${when ? esc(when.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })) : ''}</span></td>
+                <td><span class="badge ${status === 'Pending' ? 'pending' : 'completed'}">${esc(status)}</span></td>`;
 
             const actions = document.createElement('td');
-            actions.className = 'actions-col';
+            actions.className = 'col-actions';
 
             if (status === 'Pending') {
                 const complete = document.createElement('button');
-                complete.className = 'btn tiny secondary';
+                complete.className = 'btn tiny success';
                 complete.textContent = 'Complete';
                 complete.onclick = () => markCompleted(bill.billId);
                 actions.appendChild(complete);
@@ -81,25 +85,39 @@
             actions.appendChild(del);
 
             tr.appendChild(actions);
-            tbody.appendChild(tr);
+            body.appendChild(tr);
         });
 
-        updateMetrics();
+        renderBillStats();
     }
 
-    function updateMetrics() {
-        let revenue = 0, active = 0, completed = 0;
+    function renderBillStats() {
+        let revenue = 0, pending = 0, completed = 0, pendingValue = 0;
         State.bills.forEach((b) => {
-            if ((b.status || 'Pending') === 'Completed') {
-                completed++;
-                revenue += b.totalAmount || 0;
-            } else {
-                active++;
-            }
+            if ((b.status || 'Pending') === 'Completed') { completed++; revenue += b.totalAmount || 0; }
+            else { pending++; pendingValue += b.totalAmount || 0; }
         });
-        $('metric-revenue').textContent = formatCurrency(revenue);
-        $('metric-active').textContent = active;
-        $('metric-completed').textContent = completed;
+
+        $('count-pending').textContent = pending;
+        $('count-completed').textContent = completed;
+
+        $('bill-stats').innerHTML = [
+            statCard('receipt', '', State.bills.length, 'Total Bills', 'in the archive'),
+            statCard('clock', 'amber', pending, 'Awaiting Payment', formatCurrency(pendingValue)),
+            statCard('check', 'green', completed, 'Completed', formatCurrency(revenue)),
+            statCard('users', '', State.customers.length, 'Customers', 'shared directory'),
+        ].join('');
+    }
+
+    function statCard(ico, tone, value, label, chip) {
+        return `<div class="stat">
+            <div class="stat-icon ${tone}">${icon(ico)}</div>
+            <div class="stat-body">
+                <div class="stat-value">${esc(value)}</div>
+                <div class="stat-label">${esc(label)}</div>
+                ${chip ? `<span class="stat-chip">${esc(chip)}</span>` : ''}
+            </div>
+        </div>`;
     }
 
     async function markCompleted(billId) {
@@ -107,11 +125,11 @@
         if (done === null) return;
         await Promise.all([window.App.refreshBills(), window.App.refreshCustomers()]);
         renderBills();
-        toast('Marked complete. The phone that raised it has been notified.');
+        toast('Marked complete. Every phone has been notified.');
     }
 
     async function removeBill(billId) {
-        if (!confirm(`Delete bill ${billId}? This removes it from the shop archive permanently.`)) return;
+        if (!confirm(`Delete bill ${billId}?\n\nThe order is removed, but the revenue it collected stays in the books.`)) return;
         const done = await call(window.api.deleteBill(billId));
         if (done === null) return;
         await window.App.refreshBills();
@@ -124,64 +142,87 @@
         if (!res.success) toast(res.error, 'error');
     }
 
-    // ── Tabs ───────────────────────────────────────────────────────────────
+    // ── Navigation ─────────────────────────────────────────────────────────
 
     function switchTab(tab) {
         activeTab = tab;
-        document.querySelectorAll('.tab-btn').forEach((b) =>
+        document.querySelectorAll('.nav-item').forEach((b) =>
             b.classList.toggle('active', b.dataset.tab === tab));
-        document.querySelectorAll('.tab-panel').forEach((p) =>
+        document.querySelectorAll('.panel').forEach((p) =>
             p.classList.toggle('active', p.id === `panel-${tab}`));
 
+        $('page-title').textContent = TITLES[tab] || tab;
+        $('bill-pills').classList.toggle('hidden', tab !== 'bills');
+
+        const action = PRIMARY_ACTION[tab];
+        const btn = $('btn-primary-action');
+        btn.classList.toggle('hidden', !action);
+        if (action) btn.textContent = action.label;
+
         if (tab === 'customers') window.Customers.render();
+        if (tab === 'expenses') window.Expenses.render();
         if (tab === 'settings') window.Settings.render();
         if (tab === 'revenue') window.Revenue.render();
+        if (tab === 'finance') window.Finance.render();
     }
 
-    // ── Connection indicator ───────────────────────────────────────────────
-
     function setConnected(connected) {
-        const pill = $('connection-status');
-        pill.classList.toggle('online', connected);
-        pill.classList.toggle('offline', !connected);
-        pill.querySelector('.text').textContent = connected ? 'Cloud Sync Active' : 'Connecting...';
-
-        const metric = $('metric-sync');
-        metric.textContent = connected ? 'Online' : 'Offline';
-        metric.classList.toggle('sync-online', connected);
-        metric.classList.toggle('sync-offline', !connected);
+        $('conn-dot').classList.toggle('online', connected);
+        $('conn-text').textContent = connected ? 'Cloud sync active' : 'Connecting...';
     }
 
     // ── Boot ───────────────────────────────────────────────────────────────
 
     document.addEventListener('DOMContentLoaded', async () => {
-        document.querySelectorAll('.tab-btn').forEach((btn) => {
+        document.querySelectorAll('.nav-item').forEach((btn) => {
             btn.onclick = () => switchTab(btn.dataset.tab);
         });
 
-        $('search-input').oninput = (e) => { billSearch = e.target.value; renderBills(); };
-        $('bill-filter').onchange = (e) => { billFilter = e.target.value; renderBills(); };
+        $('btn-collapse').onclick = () => $('sidebar').classList.toggle('collapsed');
+
+        $('btn-primary-action').onclick = () => {
+            const action = PRIMARY_ACTION[activeTab];
+            if (action) action.run();
+        };
+
+        document.querySelectorAll('#bill-pills .pill-btn').forEach((pill) => {
+            pill.onclick = () => {
+                billFilter = pill.dataset.filter;
+                document.querySelectorAll('#bill-pills .pill-btn').forEach((p) =>
+                    p.classList.toggle('active', p === pill));
+                renderBills();
+            };
+        });
+
+        $('bill-search').oninput = (e) => { billSearch = e.target.value; renderBills(); };
 
         window.Customers.bind();
+        window.Expenses.bind();
         window.Billing.bind();
         window.Settings.bind();
         window.Revenue.bind();
+        window.Finance.bind();
 
         await Promise.all([
             window.App.refreshBills(),
             window.App.refreshCustomers(),
+            window.App.refreshExpenses(),
             window.App.refreshPricing(),
             window.App.refreshDevices(),
         ]);
         renderBills();
 
-        // The first listener callback is proof the cloud connection is live.
         window.api.onSyncChanged(async (topic) => {
             setConnected(true);
 
             if (topic === 'customers') {
                 await window.App.refreshCustomers();
                 if (activeTab === 'customers') window.Customers.render();
+                if (activeTab === 'bills') renderBills();
+            } else if (topic === 'expenses') {
+                await window.App.refreshExpenses();
+                if (activeTab === 'expenses') window.Expenses.render();
+                if (activeTab === 'finance') window.Finance.render();
             } else if (topic === 'pricing') {
                 await window.App.refreshPricing();
                 // Drop in-progress local edits rather than silently overwriting
@@ -195,11 +236,12 @@
                 await window.App.refreshBills();
                 if (activeTab === 'bills') renderBills();
                 if (activeTab === 'revenue') window.Revenue.render();
+                if (activeTab === 'finance') window.Finance.render();
             }
         });
 
-        // Assume connected once the main process has had a moment to sign in;
-        // any listener callback confirms it.
+        // Any listener callback confirms the connection; this covers a quiet shop
+        // where no document changes for a while.
         setTimeout(() => setConnected(true), 2500);
     });
 

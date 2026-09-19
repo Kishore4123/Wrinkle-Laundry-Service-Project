@@ -25,14 +25,14 @@ const firebaseConfig = {
 
 let fs = null;
 
-async function initSync({ onChange }) {
+async function initSync({ onChange, machineId, machineName }) {
   const app = initializeApp(firebaseConfig);
   await signInAnonymously(getAuth(app));
   fs = getFirestore(app);
 
   // Durable shared state rides the same connection.
   shared.init(fs, onChange);
-  await shared.registerDesktop();
+  await shared.registerDesktop(machineId, machineName);
   await shared.seedPricingIfAbsent().catch((e) =>
     console.warn('[Sync] pricing seed skipped:', e.message));
 
