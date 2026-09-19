@@ -53,7 +53,7 @@ export default function HistoryScreen({ route, navigation }) {
   const [deliveryDate, setDeliveryDate] = useState(null);
   const [showDeliveryDatePicker, setShowDeliveryDatePicker] = useState(false);
 
-  const { syncBill, flush, searchRemote } = useSync();
+  const { syncBill, flush, searchRemote, isOnline } = useSync();
 
   // Watch for scanned bill
   useFocusEffect(
@@ -133,9 +133,12 @@ export default function HistoryScreen({ route, navigation }) {
   // ── Payment / Done Handlers ──────────────────────────────
   const handlePaymentDone = async () => {
     if (selectedBill) {
-      await BillService.markBillAsCompleted(selectedBill.id);
+      const completed = await BillService.markBillAsCompleted(selectedBill.id);
       setPaymentModalVisible(false);
       setSelectedBill(null);
+      // Republish so the desktop and the other phones see it as paid. Marked
+      // unsynced above, so a failure here is retried by the next flush.
+      if (completed) syncBill(completed);
       loadBills();
     }
   };
@@ -328,7 +331,7 @@ export default function HistoryScreen({ route, navigation }) {
       {/* Sync All Button */}
       {activeBills.length > 0 && (
         <TouchableOpacity
-          style={[styles.syncAllBtn, !isConnected && styles.syncAllBtnDisabled]}
+          style={[styles.syncAllBtn, !isOnline && styles.syncAllBtnDisabled]}
           onPress={handleBatchSync}
           activeOpacity={0.7}
           disabled={syncing}
@@ -337,7 +340,7 @@ export default function HistoryScreen({ route, navigation }) {
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
             <MaterialCommunityIcons
-              name={isConnected ? 'cloud-sync' : 'cloud-off-outline'}
+              name={isOnline ? 'cloud-sync' : 'cloud-off-outline'}
               size={20}
               color="#FFFFFF"
             />

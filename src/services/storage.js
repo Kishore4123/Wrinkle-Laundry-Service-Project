@@ -313,9 +313,14 @@ export const BillService = {
       // 2. Mark as completed (do NOT delete)
       bills[billIndex].status = 'Completed';
       bills[billIndex].completedAt = new Date().toISOString();
+      // The status changed, so this bill must be republished to the desktop.
+      // flushPending() retries it if the push fails while offline.
+      bills[billIndex].synced = false;
 
       await AsyncStorage.setItem(BILLS_KEY, JSON.stringify(bills));
+      return bills[billIndex];
     }
+    return null;
   },
 
   /**
