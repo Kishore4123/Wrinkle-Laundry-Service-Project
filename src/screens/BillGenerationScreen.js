@@ -26,7 +26,7 @@ const SERVICE_KEYS = Object.keys(SERVICE_TYPES).filter(k => k !== 'IRON_DRY');
 
 export default function BillGenerationScreen() {
   // Customer search
-  const { syncBill: syncBillToDesktop } = useSync();
+  const { syncBill: syncBillToDesktop, pricingVersion } = useSync();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -52,10 +52,11 @@ export default function BillGenerationScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [generatedBill, setGeneratedBill] = useState(null);
 
-  // Load config on mount
+  // Load config on mount, and again whenever pricing changes on another device
+  // so a bill is never priced from stale rates.
   useEffect(() => {
     loadConfig();
-  }, []);
+  }, [pricingVersion]);
 
   const loadConfig = async () => {
     const config = await SettingsService.getCategories();

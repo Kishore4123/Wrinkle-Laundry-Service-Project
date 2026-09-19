@@ -3,6 +3,7 @@ import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, Touchable
 import { TextInput, Button, Text, HelperText, Snackbar } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CustomerService } from '../services/storage';
+import { pushCustomer } from '../services/SharedDataService';
 import { SettingsService } from '../services/settingsStorage';
 import { isValidMobile } from '../utils/helpers';
 import { appColors } from '../theme/theme';
@@ -52,11 +53,18 @@ export default function AddCustomerScreen({ navigation }) {
 
     setLoading(true);
     try {
-      await CustomerService.add({
+      const created = await CustomerService.add({
         name: name.trim(),
         mobile: mobile.trim(),
         category,
       });
+      // Publish to the shared directory so every device sees this customer.
+      // If it fails (offline) the record stays queued and is pushed on reconnect.
+      try {
+        await pushCustomer(created);
+      } catch (e) {
+        // Left unsynced deliberately — flushPendingCustomers() retries later.
+      }
       // Reset and go back
       setName('');
       setMobile('');

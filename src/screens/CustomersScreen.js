@@ -1,9 +1,11 @@
 // CustomersScreen — List all customers with search, delete, and FAB to add
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { View, StyleSheet, FlatList } from 'react-native';
 import { Searchbar, FAB, Text, Dialog, Portal, Button } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
 import { CustomerService } from '../services/storage';
+import { deleteCustomerRemote } from '../services/SharedDataService';
+import { useSync } from '../services/SyncContext';
 import CustomerCard from '../components/CustomerCard';
 import EmptyState from '../components/EmptyState';
 import { appColors } from '../theme/theme';
@@ -13,6 +15,7 @@ export default function CustomersScreen({ navigation }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState({ visible: false, customer: null });
+  const { customersVersion } = useSync();
 
   // Reload customers whenever this screen comes into focus
   useFocusEffect(
@@ -20,6 +23,11 @@ export default function CustomersScreen({ navigation }) {
       loadCustomers();
     }, [])
   );
+
+  // Refresh when another device adds, edits or removes a customer.
+  useEffect(() => {
+    if (customersVersion > 0 && searchQuery.trim().length === 0) loadCustomers();
+  }, [customersVersion]);
 
   const loadCustomers = async () => {
     setLoading(true);
@@ -44,6 +52,8 @@ export default function CustomersScreen({ navigation }) {
 
   const handleDelete = async () => {
     if (deleteDialog.customer) {
+      // Remove from the shared directory first so every other device drops it too.
+      await deleteCustomerRemote(deleteDialog.customer.id);
       await CustomerService.delete(deleteDialog.customer.id);
       setDeleteDialog({ visible: false, customer: null });
       loadCustomers();

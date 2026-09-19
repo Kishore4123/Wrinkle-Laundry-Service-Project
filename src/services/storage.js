@@ -58,11 +58,47 @@ export const CustomerService = {
       totalWeight: 0,
       totalAmountPaid: 0,
       createdAt: Date.now(),
+      synced: false,
     };
 
     customers.push(newCustomer);
     await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
     return newCustomer;
+  },
+
+  async markSynced(customerId) {
+    const customers = await this.getAll();
+    const i = customers.findIndex((c) => c.id === customerId);
+    if (i !== -1) {
+      customers[i].synced = true;
+      await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
+    }
+  },
+
+  async getPendingSync() {
+    const customers = await this.getAll();
+    return customers.filter((c) => c.synced !== true);
+  },
+
+  /** Upsert customers arriving from the shared directory. */
+  async cacheCustomers(remote) {
+    if (!remote || remote.length === 0) return;
+    const customers = await this.getAll();
+    const byId = new Map(customers.map((c) => [c.id, c]));
+    for (const r of remote) {
+      if (!r.id) continue;
+      byId.set(r.id, { ...(byId.get(r.id) || {}), ...r, synced: true });
+    }
+    await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(Array.from(byId.values())));
+  },
+
+  /** Remove a customer locally only — used when another device deleted it. */
+  async deleteLocal(customerId) {
+    const customers = await this.getAll();
+    await AsyncStorage.setItem(
+      CUSTOMERS_KEY,
+      JSON.stringify(customers.filter((c) => c.id !== customerId))
+    );
   },
 
   /**
@@ -108,6 +144,8 @@ export const CustomerService = {
     if (index !== -1) {
       customers[index].totalWeight = (customers[index].totalWeight || 0) + addedWeight;
       customers[index].totalAmountPaid = (customers[index].totalAmountPaid || 0) + addedAmount;
+      // Stats changed, so this record needs republishing to the other devices.
+      customers[index].synced = false;
       await AsyncStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
     }
   },
