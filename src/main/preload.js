@@ -1,10 +1,35 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
-  getBills: (options) => ipcRenderer.invoke('db:getBills', options),
+  // Bills
+  getBills: () => ipcRenderer.invoke('db:getBills'),
   addBill: (billData) => ipcRenderer.invoke('db:addBill', billData),
   updateBillStatus: (id, status) => ipcRenderer.invoke('db:updateBillStatus', { id, status }),
   deleteBill: (billId) => ipcRenderer.invoke('db:deleteBill', billId),
   allocateBillNumber: () => ipcRenderer.invoke('sync:allocateBillNumber'),
-  onSyncChanged: (cb) => ipcRenderer.on('sync:changed', cb)
+
+  // Pricing
+  getPricing: () => ipcRenderer.invoke('config:getPricing'),
+  savePricing: (categories) => ipcRenderer.invoke('config:savePricing', categories),
+
+  // Customers
+  listCustomers: () => ipcRenderer.invoke('customers:list'),
+  saveCustomer: (customer) => ipcRenderer.invoke('customers:save', customer),
+  deleteCustomer: (id) => ipcRenderer.invoke('customers:delete', id),
+
+  // Devices
+  listDevices: () => ipcRenderer.invoke('devices:list'),
+  setDevicePermission: (deviceId, canCustomize) =>
+    ipcRenderer.invoke('devices:setPermission', { deviceId, canCustomize }),
+  renameDevice: (deviceId, name) => ipcRenderer.invoke('devices:rename', { deviceId, name }),
+  forgetDevice: (deviceId) => ipcRenderer.invoke('devices:forget', deviceId),
+
+  // Reporting
+  getRevenueStats: (days) => ipcRenderer.invoke('stats:revenue', days),
+
+  // WhatsApp
+  sendWhatsApp: (mobile, message) => ipcRenderer.invoke('app:sendWhatsApp', { mobile, message }),
+
+  // Live updates from the cloud listeners
+  onSyncChanged: (cb) => ipcRenderer.on('sync:changed', (_e, topic) => cb(topic)),
 });

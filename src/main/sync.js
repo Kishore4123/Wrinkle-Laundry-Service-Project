@@ -12,6 +12,7 @@ const {
   getFirestore, doc, collection, onSnapshot, deleteDoc, setDoc, runTransaction,
 } = require('firebase/firestore');
 const db = require('./database');
+const shared = require('./shared');
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDvf57bPgRR0jA_kilIKP-GXNeMRg_ryzY',
@@ -28,6 +29,12 @@ async function initSync({ onChange }) {
   const app = initializeApp(firebaseConfig);
   await signInAnonymously(getAuth(app));
   fs = getFirestore(app);
+
+  // Durable shared state rides the same connection.
+  shared.init(fs, onChange);
+  await shared.registerDesktop();
+  await shared.seedPricingIfAbsent().catch((e) =>
+    console.warn('[Sync] pricing seed skipped:', e.message));
 
   // Mobile -> desktop: ingest each bill into SQLite, then delete the doc.
   onSnapshot(

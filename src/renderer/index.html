@@ -2,110 +2,251 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wrinkle Laundry Service Command Center</title>
+    <title>Wrinkle Laundry Command Center</title>
     <link rel="stylesheet" href="styles/main.css">
-    <!-- Included in Main process now -->
+    <link rel="stylesheet" href="styles/tabs.css">
 </head>
 <body>
-    <div class="app-container">
-        <!-- Header -->
-        <header class="top-nav">
-            <div class="brand">
-                <img src="../../assets/icons/logo.png" alt="Wrinkle Release Laundry Service" class="logo" id="brand-logo" onerror="this.style.display='none'; document.getElementById('brand-text-logo').style.display='inline-block';">
-                <span id="brand-text-logo" style="display: none; font-weight: 800; color: var(--accent-primary); font-size: 1.5rem; letter-spacing: -0.5px; margin-right: 0.5rem;">Wrinkle Release</span>
-                <h1>Command Center</h1>
+<div class="app-container">
+
+    <header class="top-nav">
+        <div class="brand">
+            <span id="brand-text-logo" style="font-weight:800;color:var(--accent-primary);font-size:1.5rem;letter-spacing:-0.5px;">Wrinkle Release</span>
+            <h1>Command Center</h1>
+        </div>
+        <div class="controls">
+            <div class="status-pill offline" id="connection-status">
+                <span class="indicator"></span>
+                <span class="text">Connecting...</span>
             </div>
-            <div class="controls">
-                <div class="status-pill offline" id="connection-status">
-                    <span class="indicator"></span>
-                    <span class="text">Connecting...</span>
+        </div>
+    </header>
+
+    <nav class="tab-bar" id="tab-bar">
+        <button class="tab-btn active" data-tab="bills">Bills</button>
+        <button class="tab-btn" data-tab="customers">Customers</button>
+        <button class="tab-btn" data-tab="revenue">Revenue</button>
+        <button class="tab-btn" data-tab="settings">Settings &amp; Devices</button>
+    </nav>
+
+    <main class="tab-content">
+
+        <!-- ── Bills ───────────────────────────────────────────────── -->
+        <section class="tab-panel active" id="panel-bills">
+            <div class="metrics-grid">
+                <div class="metric-card glass">
+                    <p class="label">Revenue Collected</p>
+                    <p class="value" id="metric-revenue">₹0</p>
+                </div>
+                <div class="metric-card glass">
+                    <p class="label">Active Orders</p>
+                    <p class="value" id="metric-active">0</p>
+                </div>
+                <div class="metric-card glass">
+                    <p class="label">Completed</p>
+                    <p class="value" id="metric-completed">0</p>
+                </div>
+                <div class="metric-card glass">
+                    <p class="label">Cloud Sync</p>
+                    <p class="value sync-offline" id="metric-sync">Offline</p>
                 </div>
             </div>
-        </header>
 
-        <!-- Metrics Dashboard -->
-        <section class="metrics-grid">
-            <div class="metric-card">
-                <h3 class="title">Today's Revenue</h3>
-                <p class="value" id="metric-revenue">₹0.00</p>
+            <div class="panel-toolbar">
+                <input type="text" id="search-input" class="search-input" placeholder="Search by name, phone or bill number...">
+                <div class="toolbar-actions">
+                    <select id="bill-filter" class="select-input">
+                        <option value="all">All bills</option>
+                        <option value="Pending">Pending only</option>
+                        <option value="Completed">Completed only</option>
+                    </select>
+                    <button class="btn primary" id="btn-new-order">+ New Bill</button>
+                </div>
             </div>
-            <div class="metric-card">
-                <h3 class="title">Active Orders</h3>
-                <p class="value" id="metric-active">0</p>
-            </div>
-            <div class="metric-card">
-                <h3 class="title">Completed</h3>
-                <p class="value" id="metric-completed">0</p>
-            </div>
-            <div class="metric-card">
-                <h3 class="title">Sync Status</h3>
-                <p class="value sync-offline" id="metric-sync">Offline</p>
+
+            <div class="table-wrapper glass">
+                <table class="data-table">
+                    <thead>
+                    <tr>
+                        <th>Bill No</th>
+                        <th>Customer</th>
+                        <th>Phone</th>
+                        <th>Amount</th>
+                        <th>Date</th>
+                        <th>Status</th>
+                        <th class="actions-col">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody id="orders-tbody"></tbody>
+                </table>
+                <div class="empty-state hidden" id="bills-empty">No bills yet. Create one or wait for a phone to sync.</div>
             </div>
         </section>
 
-        <!-- Main Content -->
-        <main class="content-area">
-            <div class="orders-section">
-                <div class="section-header">
-                    <h2>Live Orders</h2>
-                    <div class="filters">
-                        <input type="text" id="search-input" placeholder="Search customer or phone...">
-                        <button class="btn secondary" id="btn-new-order">New Order</button>
-                    </div>
-                </div>
-                <div class="table-container">
-                    <table id="orders-table">
-                        <thead>
-                            <tr>
-                                <th>Bill ID</th>
-                                <th>Customer Name</th>
-                                <th>Phone</th>
-                                <th>Total Amount</th>
-                                <th>Date/Time</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="orders-tbody">
-                            <!-- Dynamic Rows -->
-                        </tbody>
-                    </table>
+        <!-- ── Customers ───────────────────────────────────────────── -->
+        <section class="tab-panel" id="panel-customers">
+            <div class="panel-toolbar">
+                <input type="text" id="customer-search" class="search-input" placeholder="Search customers by name, phone or category...">
+                <div class="toolbar-actions">
+                    <button class="btn primary" id="btn-new-customer">+ Add Customer</button>
                 </div>
             </div>
-        </main>
-    </div>
+            <div class="table-wrapper glass">
+                <table class="data-table">
+                    <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Phone</th>
+                        <th>Category</th>
+                        <th>Total Weight</th>
+                        <th>Lifetime Paid</th>
+                        <th class="actions-col">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody id="customers-tbody"></tbody>
+                </table>
+                <div class="empty-state hidden" id="customers-empty">No customers yet. Add one, or they'll appear as phones sync.</div>
+            </div>
+        </section>
 
-    <!-- New Order Modal -->
-    <div class="modal-overlay hidden" id="order-modal">
-        <div class="modal-content glass">
-            <h2>Create New Order</h2>
-            <form id="new-order-form">
-                <div class="form-group">
-                    <label>Customer Name</label>
-                    <input type="text" id="order-name" required>
+        <!-- ── Revenue ─────────────────────────────────────────────── -->
+        <section class="tab-panel" id="panel-revenue">
+            <div class="panel-toolbar">
+                <h2 class="panel-title">Revenue Dashboard</h2>
+                <div class="toolbar-actions">
+                    <select id="revenue-range" class="select-input">
+                        <option value="7">Last 7 days</option>
+                        <option value="30" selected>Last 30 days</option>
+                        <option value="90">Last 90 days</option>
+                    </select>
                 </div>
-                <div class="form-group">
-                    <label>Phone Number</label>
-                    <input type="text" id="order-phone" required>
+            </div>
+            <div id="revenue-body"></div>
+        </section>
+
+        <!-- ── Settings & Devices ──────────────────────────────────── -->
+        <section class="tab-panel" id="panel-settings">
+            <div class="settings-layout">
+                <div class="settings-col">
+                    <h2 class="panel-title">Pricing</h2>
+                    <div class="glass card-pad">
+                        <div class="category-row" id="category-pills"></div>
+                        <div class="inline-form" id="add-category-form">
+                            <input type="text" id="new-category-name" class="search-input" placeholder="New category name">
+                            <button class="btn secondary" id="btn-add-category">Add Category</button>
+                        </div>
+                        <div id="pricing-editor"></div>
+                        <button class="btn primary full-width" id="btn-save-pricing">Save Pricing</button>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>Items/Services</label>
-                    <textarea id="order-items" placeholder="e.g. 5x Shirts, 2x Pants" required></textarea>
+                <div class="settings-col">
+                    <h2 class="panel-title">Device Control</h2>
+                    <div class="glass card-pad">
+                        <p class="help-text">
+                            Devices appear here once they connect. Turn on <strong>Can edit pricing</strong>
+                            to let that phone change categories, items and prices.
+                        </p>
+                        <div id="devices-list"></div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>Total Amount (₹)</label>
-                    <input type="number" step="0.01" id="order-total" required>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<!-- ── New / Edit Customer Modal ──────────────────────────────────── -->
+<div class="modal-overlay hidden" id="customer-modal">
+    <div class="modal-content glass">
+        <h2 id="customer-modal-title">Add Customer</h2>
+        <form id="customer-form">
+            <input type="hidden" id="customer-id">
+            <label>Name</label>
+            <input type="text" id="customer-name" required>
+            <label>Mobile (10 digits)</label>
+            <input type="text" id="customer-mobile" maxlength="10" required>
+            <label>Category</label>
+            <select id="customer-category"></select>
+            <div class="modal-actions">
+                <button type="button" class="btn secondary" id="btn-cancel-customer">Cancel</button>
+                <button type="submit" class="btn primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── New Bill Modal (mirrors the mobile cart flow) ──────────────── -->
+<div class="modal-overlay hidden" id="order-modal">
+    <div class="modal-content glass wide">
+        <h2>Create New Bill</h2>
+
+        <div class="bill-grid">
+            <div class="bill-left">
+                <label>Customer</label>
+                <input type="text" id="bill-customer-search" placeholder="Search customer by name or phone...">
+                <div class="search-results hidden" id="bill-customer-results"></div>
+                <div class="selected-customer hidden" id="bill-selected-customer"></div>
+
+                <label>Service</label>
+                <div class="service-row" id="bill-service-row"></div>
+
+                <label>Billing Mode</label>
+                <div class="segmented" id="bill-mode-row">
+                    <button type="button" class="seg-btn active" data-mode="kg">Per Kg</button>
+                    <button type="button" class="seg-btn" data-mode="piece">Per Piece</button>
                 </div>
-                <div class="form-actions">
+
+                <div id="bill-kg-section">
+                    <label>Weight (kg)</label>
+                    <input type="text" id="bill-weight" placeholder="e.g. 3.5">
+                    <p class="rate-hint" id="bill-rate-hint"></p>
+                    <label>Garments (optional breakdown)</label>
+                    <div class="item-picker" id="bill-clothing-picker"></div>
+                </div>
+
+                <div id="bill-piece-section" class="hidden">
+                    <label>Items</label>
+                    <div class="item-picker" id="bill-piece-picker"></div>
+                </div>
+
+                <button type="button" class="btn secondary full-width" id="btn-add-to-cart">Add to Cart</button>
+            </div>
+
+            <div class="bill-right">
+                <label>Cart</label>
+                <div class="cart-list" id="bill-cart"></div>
+                <div class="cart-summary" id="bill-cart-summary"></div>
+                <label>Due Date (optional)</label>
+                <input type="date" id="bill-due-date">
+                <div class="modal-actions">
                     <button type="button" class="btn secondary" id="btn-cancel-order">Cancel</button>
-                    <button type="submit" class="btn primary">Save Order</button>
+                    <button type="button" class="btn primary" id="btn-generate-bill">Generate Bill</button>
                 </div>
-            </form>
+            </div>
         </div>
     </div>
+</div>
 
-    <!-- Scripts -->
-    <script src="js/app.js"></script>
+<!-- ── Bill Confirmation ──────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="confirm-modal">
+    <div class="modal-content glass">
+        <h2>Bill Created</h2>
+        <div id="confirm-body"></div>
+        <div class="modal-actions">
+            <button type="button" class="btn secondary" id="btn-close-confirm">Close</button>
+            <button type="button" class="btn whatsapp" id="btn-send-whatsapp">Send on WhatsApp</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script src="js/format.js"></script>
+<script src="js/state.js"></script>
+<script src="js/customers.js"></script>
+<script src="js/billing.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/revenue.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>
