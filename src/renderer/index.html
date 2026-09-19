@@ -20,7 +20,11 @@
         </div>
 
         <nav class="nav" id="nav">
-            <button class="nav-item active" data-tab="bills">
+            <button class="nav-item active" data-tab="newbill">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+                <span class="nav-label">New Bill</span>
+            </button>
+            <button class="nav-item" data-tab="bills">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>
                 <span class="nav-label">Bills</span>
             </button>
@@ -67,8 +71,74 @@
 
         <main class="content">
 
+            <!-- New Bill — point-of-sale layout -->
+            <section class="panel active" id="panel-newbill">
+                <div class="pos">
+                    <div class="pos-main">
+                        <div class="card card-pad">
+                            <label class="field">Customer</label>
+                            <div class="customer-bar">
+                                <input type="text" id="bill-customer-search" class="input grow"
+                                       placeholder="Search by name or mobile number..." autocomplete="off">
+                                <button class="btn ghost" id="btn-quick-customer">+ New Customer</button>
+                            </div>
+                            <div class="result-list hidden" id="bill-customer-results"></div>
+                            <div class="picked hidden" id="bill-selected-customer"></div>
+                        </div>
+
+                        <div class="card card-pad">
+                            <div class="pos-head">
+                                <span class="pos-title">Service Type</span>
+                                <div class="segmented compact" id="bill-mode-row">
+                                    <button type="button" class="seg active" data-mode="kg">Per Kg</button>
+                                    <button type="button" class="seg" data-mode="piece">Per Piece</button>
+                                </div>
+                            </div>
+                            <div class="service-row" id="bill-service-row"></div>
+                        </div>
+
+                        <div class="card card-pad" id="bill-kg-section">
+                            <div class="pos-head"><span class="pos-title">Weight &amp; Garments</span></div>
+                            <div class="kg-row">
+                                <div>
+                                    <label class="field">Weight (kg)</label>
+                                    <input type="text" id="bill-weight" class="input" placeholder="e.g. 3.5">
+                                </div>
+                                <p class="hint" id="bill-rate-hint"></p>
+                            </div>
+                            <label class="field">Garment breakdown (optional)</label>
+                            <div class="item-grid" id="bill-clothing-picker"></div>
+                        </div>
+
+                        <div class="card card-pad hidden" id="bill-piece-section">
+                            <div class="pos-head"><span class="pos-title">Items</span><span class="hint" id="bill-piece-total"></span></div>
+                            <div class="item-grid" id="bill-piece-picker"></div>
+                        </div>
+
+                        <button type="button" class="btn primary block" id="btn-add-to-cart">Add to Cart</button>
+                    </div>
+
+                    <aside class="pos-side card">
+                        <div class="pos-side-head">
+                            <span class="pos-title">Live Order</span>
+                            <span class="badge neutral" id="cart-count">0 items</span>
+                        </div>
+                        <div class="pos-side-body">
+                            <div class="cart" id="bill-cart"></div>
+                        </div>
+                        <div class="pos-side-foot">
+                            <div class="totals" id="bill-cart-summary"></div>
+                            <label class="field">Due Date (optional)</label>
+                            <input type="date" id="bill-due-date" class="input">
+                            <button type="button" class="btn primary block" id="btn-generate-bill">Generate Bill</button>
+                            <button type="button" class="btn ghost block" id="btn-clear-cart">Clear</button>
+                        </div>
+                    </aside>
+                </div>
+            </section>
+
             <!-- Bills -->
-            <section class="panel active" id="panel-bills">
+            <section class="panel" id="panel-bills">
                 <div class="stat-grid" id="bill-stats"></div>
                 <div class="toolbar">
                     <input type="text" id="bill-search" class="input grow" placeholder="Search by name, phone or bill number...">
@@ -256,54 +326,21 @@
     </div>
 </div>
 
-<!-- ── New bill modal ──────────────────────────────────────────────── -->
-<div class="overlay hidden" id="order-modal">
-    <div class="modal wide">
-        <h2>Create New Bill</h2>
-        <div class="bill-grid">
-            <div class="bill-col">
-                <label class="field">Customer</label>
-                <input type="text" id="bill-customer-search" class="input" placeholder="Search customer by name or phone...">
-                <div class="result-list hidden" id="bill-customer-results"></div>
-                <div class="picked hidden" id="bill-selected-customer"></div>
-
-                <label class="field">Service</label>
-                <div class="service-row" id="bill-service-row"></div>
-
-                <label class="field">Billing Mode</label>
-                <div class="segmented" id="bill-mode-row">
-                    <button type="button" class="seg active" data-mode="kg">Per Kg</button>
-                    <button type="button" class="seg" data-mode="piece">Per Piece</button>
-                </div>
-
-                <div id="bill-kg-section">
-                    <label class="field">Weight (kg)</label>
-                    <input type="text" id="bill-weight" class="input" placeholder="e.g. 3.5">
-                    <p class="hint" id="bill-rate-hint"></p>
-                    <label class="field">Garments (optional breakdown)</label>
-                    <div class="picker" id="bill-clothing-picker"></div>
-                </div>
-
-                <div id="bill-piece-section" class="hidden">
-                    <label class="field">Items</label>
-                    <div class="picker" id="bill-piece-picker"></div>
-                </div>
-
-                <button type="button" class="btn ghost block" id="btn-add-to-cart">Add to Cart</button>
+<!-- ── Rename / text prompt ────────────────────────────────────────
+     Electron has no window.prompt(), so renaming needs a real dialog. -->
+<div class="overlay hidden" id="prompt-modal">
+    <div class="modal">
+        <h2 id="prompt-title">Rename</h2>
+        <p class="help" id="prompt-help"></p>
+        <form id="prompt-form">
+            <div class="field-row one" style="margin-top:0.85rem">
+                <div><input type="text" id="prompt-input" class="input" autocomplete="off"></div>
             </div>
-
-            <div class="bill-col">
-                <label class="field">Cart</label>
-                <div class="cart" id="bill-cart"></div>
-                <div class="totals" id="bill-cart-summary"></div>
-                <label class="field">Due Date (optional)</label>
-                <input type="date" id="bill-due-date" class="input">
-                <div class="modal-actions">
-                    <button type="button" class="btn ghost" id="btn-cancel-order">Cancel</button>
-                    <button type="button" class="btn primary" id="btn-generate-bill">Generate Bill</button>
-                </div>
+            <div class="modal-actions">
+                <button type="button" class="btn ghost" id="btn-prompt-cancel">Cancel</button>
+                <button type="submit" class="btn primary" id="btn-prompt-ok">Save</button>
             </div>
-        </div>
+        </form>
     </div>
 </div>
 

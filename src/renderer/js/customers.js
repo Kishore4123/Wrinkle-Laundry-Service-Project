@@ -51,12 +51,18 @@
         });
     }
 
-    function openModal(customer) {
+    // Set when the bill screen opens this modal, so the new customer can be
+    // handed straight back and selected without a detour to the Customers tab.
+    let onSaved = null;
+
+    function openModal(customer, options = {}) {
         const isEdit = !!customer;
+        onSaved = options.onSaved || null;
+
         $('customer-modal-title').textContent = isEdit ? 'Edit Customer' : 'Add Customer';
         $('customer-id').value = isEdit ? customer.id : '';
-        $('customer-name').value = isEdit ? customer.name : '';
-        $('customer-mobile').value = isEdit ? customer.mobile : '';
+        $('customer-name').value = isEdit ? customer.name : (options.name || '');
+        $('customer-mobile').value = isEdit ? customer.mobile : (options.mobile || '');
 
         const select = $('customer-category');
         select.innerHTML = '';
@@ -73,6 +79,7 @@
 
     function closeModal() {
         $('customer-modal').classList.add('hidden');
+        onSaved = null;
     }
 
     async function save(event) {
@@ -103,6 +110,15 @@
         await window.App.refreshCustomers();
         render();
         toast(id ? 'Customer updated on all devices.' : 'Customer added on all devices.');
+
+        if (onSaved) {
+            // Hand back the stored row rather than the draft, so the caller gets
+            // whatever the database actually holds.
+            const stored = State.customers.find((c) => c.id === record.id) || record;
+            const cb = onSaved;
+            onSaved = null;
+            cb(stored);
+        }
     }
 
     async function remove(customer) {
@@ -123,5 +139,5 @@
         };
     }
 
-    window.Customers = { bind, render, openModal: () => openModal(null) };
+    window.Customers = { bind, render, openModal };
 })();

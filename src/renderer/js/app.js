@@ -6,18 +6,18 @@
 
     let billSearch = '';
     let billFilter = 'all';
-    let activeTab = 'bills';
+    let activeTab = 'newbill';
 
     // What the top-right button does on each tab. Tabs without an entry hide it.
     const PRIMARY_ACTION = {
-        bills: { label: '+ New Bill', run: () => window.Billing.open() },
-        customers: { label: '+ Add Customer', run: () => window.Customers.openModal() },
+        bills: { label: '+ New Bill', run: () => switchTab('newbill') },
+        customers: { label: '+ Add Customer', run: () => window.Customers.openModal(null) },
         expenses: { label: '+ Add Expense', run: () => window.Expenses.openModal() },
     };
 
     const TITLES = {
-        bills: 'Bills', customers: 'Customers', expenses: 'Expenses',
-        revenue: 'Revenue', finance: 'Finance', settings: 'Settings',
+        newbill: 'New Bill', bills: 'Bills', customers: 'Customers',
+        expenses: 'Expenses', revenue: 'Revenue', finance: 'Finance', settings: 'Settings',
     };
 
     // ── Bills tab ──────────────────────────────────────────────────────────
@@ -159,6 +159,7 @@
         btn.classList.toggle('hidden', !action);
         if (action) btn.textContent = action.label;
 
+        if (tab === 'newbill') window.Billing.render();
         if (tab === 'customers') window.Customers.render();
         if (tab === 'expenses') window.Expenses.render();
         if (tab === 'settings') window.Settings.render();

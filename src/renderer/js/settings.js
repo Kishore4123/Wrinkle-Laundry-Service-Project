@@ -5,7 +5,7 @@
 // everywhere, while editing a price touches only the selected category.
 
 (function () {
-    const { State, $, esc, toast, call, categoryNames } = window.App;
+    const { State, $, esc, toast, call, askText, categoryNames } = window.App;
     const { SERVICE_TYPES, formatDateShort } = window.Fmt;
 
     const PIECE_SERVICES = ['WASH_ONLY', 'WASH_AND_IRON', 'IRON_STEAM'];
@@ -206,13 +206,14 @@
         return row;
     }
 
-    function renameItem(cats, svcKey, oldName) {
-        const newName = prompt(
-            'Rename this item. The name changes in every category; prices are unaffected.',
-            oldName
-        );
-        if (!newName || newName.trim() === oldName) return;
-        const target = newName.trim();
+    async function renameItem(cats, svcKey, oldName) {
+        const target = await askText({
+            title: 'Rename Item',
+            help: 'The name changes in every customer category. Prices are not affected.',
+            value: oldName,
+            okLabel: 'Rename',
+        });
+        if (!target || target === oldName) return;
 
         if (cats[selected]?.pieceRates?.[svcKey]?.[target] !== undefined) {
             return toast('Another item already uses that name.', 'error');
@@ -308,9 +309,14 @@
                     rename.className = 'link-btn';
                     rename.textContent = 'Rename';
                     rename.onclick = async () => {
-                        const name = prompt('Name this device (e.g. "Ravi\'s phone")', device.name || '');
+                        const name = await askText({
+                            title: 'Rename Device',
+                            help: 'A name you will recognise, such as the person who carries it.',
+                            value: device.name || '',
+                            okLabel: 'Rename',
+                        });
                         if (!name) return;
-                        const res = await window.api.renameDevice(device.deviceId, name.trim());
+                        const res = await window.api.renameDevice(device.deviceId, name);
                         if (!res.success) return toast(res.error, 'error');
                         await window.App.refreshDevices();
                         render();

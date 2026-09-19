@@ -1,4 +1,5 @@
-// billing.js — New Bill flow, mirroring the mobile BillGenerationScreen.
+// billing.js — the New Bill tab, laid out as a point-of-sale screen: pick a
+// customer, pick a service, tap items, watch the live order build on the right.
 //
 // Cart item shape is identical to mobile's so the same bill renders the same
 // receipt on either device:
@@ -10,7 +11,7 @@
 
     const SERVICE_KEYS = ['WASH_ONLY', 'WASH_AND_IRON', 'IRON_STEAM'];
 
-    let draft = null;
+    let draft = blankDraft();
     let lastBill = null;
 
     function blankDraft() {
@@ -25,35 +26,34 @@
         };
     }
 
-    function open() {
+    /** Called when the tab is opened; keeps any half-built order intact. */
+    function render() {
+        renderCustomer();
+        renderServices();
+        renderModes();
+        renderKgSection();
+        renderPieceSection();
+        renderCart();
+    }
+
+    function reset() {
         draft = blankDraft();
         $('bill-customer-search').value = '';
         $('bill-due-date').value = '';
-        $('bill-selected-customer').classList.add('hidden');
         $('bill-customer-results').classList.add('hidden');
         render();
-        $('order-modal').classList.remove('hidden');
-    }
-
-    function close() {
-        $('order-modal').classList.add('hidden');
-        draft = null;
     }
 
     // ── Rate lookup ────────────────────────────────────────────────────────
 
-    function currentCategory() {
-        return draft.customer?.category || 'Student';
-    }
+    const currentCategory = () => draft.customer?.category || 'Student';
 
     function kgRate() {
         const p = pricingFor(currentCategory());
         return p.kgRates?.[draft.serviceType] ?? SERVICE_TYPES[draft.serviceType]?.defaultRate ?? 0;
     }
 
-    function pieceRates() {
-        return pricingFor(currentCategory()).pieceRates?.[draft.serviceType] || {};
-    }
+    const pieceRates = () => pricingFor(currentCategory()).pieceRates?.[draft.serviceType] || {};
 
     function currentSubtotal() {
         if (draft.mode === 'kg') {
@@ -62,15 +62,90 @@
         return draft.piecewiseItems.reduce((sum, i) => sum + i.count * i.rate, 0);
     }
 
-    // ── Rendering ──────────────────────────────────────────────────────────
+    // ── Customer ───────────────────────────────────────────────────────────
 
-    function render() {
-        renderServices();
-        renderModes();
-        renderKgSection();
-        renderPieceSection();
-        renderCart();
+    function renderCustomer() {
+        const box = $('bill-selected-customer');
+        if (!draft.customer) { box.classList.add('hidden'); return; }
+        box.innerHTML = `<strong>${esc(draft.customer.name)}</strong>
+            <span>${esc(draft.customer.mobile)} · ${esc(draft.customer.category || 'Student')}</span>`;
+
+        const clear = document.createElement('button');
+        clear.className = 'link-btn danger';
+        clear.textContent = 'Change';
+        clear.onclick = () => { draft.customer = null; render(); };
+        box.appendChild(clear);
+        box.classList.remove('hidden');
     }
+
+    /**
+     * Matches on name, mobile or category. An empty query lists everyone, so
+     * clicking the box is enough to browse — you don't have to guess a spelling.
+     */
+    function searchCustomers(query) {
+        const box = $('bill-customer-results');
+        const q = query.trim().toLowerCase();
+
+        const matches = (q
+            ? State.customers.filter((c) =>
+                (c.name || '').toLowerCase().includes(q) ||
+                (c.mobile || '').includes(q) ||
+                (c.category || '').toLowerCase().includes(q))
+            : State.customers
+        ).slice(0, 8);
+
+        box.innerHTML = '';
+
+        if (State.customers.length === 0) {
+            box.innerHTML = '<p class="help" style="padding:0.7rem 0.85rem">No customers yet. Use “+ New Customer” to add the first one.</p>';
+            box.classList.remove('hidden');
+            return;
+        }
+
+        matches.forEach((c) => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'result-item';
+            row.innerHTML = `<strong>${esc(c.name)}</strong><span>${esc(c.mobile)} · ${esc(c.category || 'Student')}</span>`;
+            row.onclick = () => selectCustomer(c);
+            box.appendChild(row);
+        });
+
+        if (matches.length === 0) {
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.className = 'result-item';
+            add.innerHTML = `<strong>Add “${esc(query.trim())}” as a new customer</strong><span>No match in the directory</span>`;
+            add.onclick = () => quickAddCustomer(query.trim());
+            box.appendChild(add);
+        }
+
+        box.classList.remove('hidden');
+    }
+
+    function selectCustomer(c) {
+        draft.customer = c;
+        $('bill-customer-search').value = '';
+        $('bill-customer-results').classList.add('hidden');
+        render();
+    }
+
+    /**
+     * Add a customer without leaving the till. If what was typed looks like a
+     * phone number it prefills the mobile field, otherwise the name.
+     */
+    function quickAddCustomer(typed) {
+        $('bill-customer-results').classList.add('hidden');
+        const digits = String(typed || '').replace(/\D/g, '');
+        const looksLikePhone = digits.length >= 6;
+        window.Customers.openModal(null, {
+            name: looksLikePhone ? '' : typed,
+            mobile: looksLikePhone ? digits.slice(0, 10) : '',
+            onSaved: (customer) => selectCustomer(customer),
+        });
+    }
+
+    // ── Services & mode ────────────────────────────────────────────────────
 
     function renderServices() {
         const row = $('bill-service-row');
@@ -106,89 +181,93 @@
         $('bill-piece-section').classList.toggle('hidden', draft.mode !== 'piece');
     }
 
+    // ── Item pickers ───────────────────────────────────────────────────────
+
     function renderKgSection() {
         $('bill-weight').value = draft.weight;
-        $('bill-rate-hint').textContent =
-            `Rate for ${currentCategory()}: ₹${kgRate()}/kg → subtotal ${formatCurrency(currentSubtotal())}`;
+        updateRateHint();
 
-        const picker = $('bill-clothing-picker');
-        picker.innerHTML = '';
+        const grid = $('bill-clothing-picker');
+        grid.innerHTML = '';
         CLOTHING_CATEGORIES.forEach((cat) => {
             const existing = draft.clothingItems.find((i) => i.key === cat.key);
-            picker.appendChild(counterRow(cat.label, existing?.count || 0, null, (next) => {
+            grid.appendChild(itemTile(cat.label, null, existing?.count || 0, (next) => {
                 const idx = draft.clothingItems.findIndex((i) => i.key === cat.key);
-                if (next <= 0) {
-                    if (idx !== -1) draft.clothingItems.splice(idx, 1);
-                } else if (idx === -1) {
-                    draft.clothingItems.push({ key: cat.key, label: cat.label, count: next });
-                } else {
-                    draft.clothingItems[idx].count = next;
-                }
+                if (next <= 0) { if (idx !== -1) draft.clothingItems.splice(idx, 1); }
+                else if (idx === -1) draft.clothingItems.push({ key: cat.key, label: cat.label, count: next });
+                else draft.clothingItems[idx].count = next;
                 renderKgSection();
             }));
         });
     }
 
+    function updateRateHint() {
+        $('bill-rate-hint').textContent =
+            `${currentCategory()} rate ₹${kgRate()}/kg → subtotal ${formatCurrency(currentSubtotal())}`;
+    }
+
     function renderPieceSection() {
-        const picker = $('bill-piece-picker');
-        picker.innerHTML = '';
+        const grid = $('bill-piece-picker');
+        grid.innerHTML = '';
         const rates = pieceRates();
         const names = Object.keys(rates);
 
+        $('bill-piece-total').textContent = `Subtotal ${formatCurrency(currentSubtotal())}`;
+
         if (names.length === 0) {
-            picker.innerHTML = '<p class="help">No per-piece prices set for this service. Add them under Settings.</p>';
+            grid.innerHTML = '<p class="help">No per-piece prices set for this service. Add them under Settings.</p>';
             return;
         }
 
         names.forEach((name) => {
             const rate = rates[name];
             const existing = draft.piecewiseItems.find((i) => i.label === name);
-            picker.appendChild(counterRow(name, existing?.count || 0, rate, (next) => {
+            grid.appendChild(itemTile(name, rate, existing?.count || 0, (next) => {
                 const idx = draft.piecewiseItems.findIndex((i) => i.label === name);
-                if (next <= 0) {
-                    if (idx !== -1) draft.piecewiseItems.splice(idx, 1);
-                } else if (idx === -1) {
-                    draft.piecewiseItems.push({ label: name, rate, count: next });
-                } else {
-                    draft.piecewiseItems[idx].count = next;
-                }
+                if (next <= 0) { if (idx !== -1) draft.piecewiseItems.splice(idx, 1); }
+                else if (idx === -1) draft.piecewiseItems.push({ label: name, rate, count: next });
+                else draft.piecewiseItems[idx].count = next;
                 renderPieceSection();
             }));
         });
-
-        const total = document.createElement('p');
-        total.className = 'hint';
-        total.textContent = `Subtotal: ${formatCurrency(currentSubtotal())}`;
-        picker.appendChild(total);
     }
 
-    function counterRow(label, count, rate, onChange) {
-        const row = document.createElement('div');
-        row.className = 'count-row' + (count > 0 ? ' on' : '');
-        const priceTag = rate ? `<small>₹${rate}</small>` : '';
-        row.innerHTML = `<span class="count-name">${esc(label)} ${priceTag}</span>`;
+    /** A tappable card: click anywhere to add one, use −/+ to fine-tune. */
+    function itemTile(label, rate, count, onChange) {
+        const tile = document.createElement('div');
+        tile.className = 'item-tile' + (count > 0 ? ' on' : '');
+        tile.innerHTML = `
+            <div class="item-name">${esc(label)}</div>
+            <div class="item-rate">${rate ? '₹' + rate : '—'}</div>`;
 
         const controls = document.createElement('div');
-        controls.className = 'counter';
+        controls.className = 'item-counter';
+
         const minus = document.createElement('button');
-        minus.type = 'button'; minus.className = ''; minus.textContent = '−';
-        minus.onclick = () => onChange(count - 1);
-        const value = document.createElement('span');
-        value.className = 'val'; value.textContent = count;
+        minus.type = 'button'; minus.textContent = '−';
+        minus.onclick = (e) => { e.stopPropagation(); onChange(count - 1); };
+
+        const val = document.createElement('span');
+        val.className = 'val'; val.textContent = count;
+
         const plus = document.createElement('button');
-        plus.type = 'button'; plus.className = ''; plus.textContent = '+';
-        plus.onclick = () => onChange(count + 1);
-        controls.append(minus, value, plus);
-        row.appendChild(controls);
-        return row;
+        plus.type = 'button'; plus.textContent = '+';
+        plus.onclick = (e) => { e.stopPropagation(); onChange(count + 1); };
+
+        controls.append(minus, val, plus);
+        tile.appendChild(controls);
+        tile.onclick = () => onChange(count + 1);
+        return tile;
     }
+
+    // ── Live order ─────────────────────────────────────────────────────────
 
     function renderCart() {
         const list = $('bill-cart');
         list.innerHTML = '';
 
         if (draft.cart.length === 0) {
-            list.innerHTML = '<p class="help">Nothing added yet. Build a service above and add it to the cart.</p>';
+            list.innerHTML = '<p class="help" style="padding:1.5rem 0;text-align:center">No items added yet.</p>';
         }
 
         draft.cart.forEach((item, index) => {
@@ -203,9 +282,8 @@
                     <strong>${esc(label)}</strong>
                     <p class="detail">${detail || '—'}</p>
                 </div>
-                <div class="cart-right">
-                    <span>${formatCurrency(item.subtotal)}</span>
-                </div>`;
+                <div class="cart-right"><span>${formatCurrency(item.subtotal)}</span></div>`;
+
             const remove = document.createElement('button');
             remove.type = 'button'; remove.className = 'link-btn danger'; remove.textContent = 'Remove';
             remove.onclick = () => { draft.cart.splice(index, 1); renderCart(); };
@@ -216,47 +294,12 @@
         const totalAmount = draft.cart.reduce((s, i) => s + i.subtotal, 0);
         const totalWeight = draft.cart.reduce((s, i) => s + (i.weight || 0), 0);
         const totalPieces = draft.cart.reduce((s, i) => s + (i.items || []).reduce((a, b) => a + b.count, 0), 0);
+
+        $('cart-count').textContent = `${draft.cart.length} item${draft.cart.length === 1 ? '' : 's'}`;
         $('bill-cart-summary').innerHTML = `
             <div><span>Total weight</span><strong>${totalWeight} kg</strong></div>
-            <div><span>Total items</span><strong>${totalPieces}</strong></div>
-            <div class="grand"><span>Total</span><strong>${formatCurrency(totalAmount)}</strong></div>`;
-    }
-
-    // ── Customer search ────────────────────────────────────────────────────
-
-    function searchCustomers(query) {
-        const box = $('bill-customer-results');
-        const q = query.trim().toLowerCase();
-        if (!q) { box.classList.add('hidden'); return; }
-
-        const matches = State.customers.filter((c) =>
-            (c.name || '').toLowerCase().includes(q) ||
-            (c.mobile || '').includes(q) ||
-            (c.category || '').toLowerCase().includes(q)
-        ).slice(0, 8);
-
-        box.innerHTML = '';
-        if (matches.length === 0) {
-            box.innerHTML = '<p class="help">No match. Add the customer from the Customers tab first.</p>';
-        }
-        matches.forEach((c) => {
-            const row = document.createElement('button');
-            row.type = 'button'; row.className = 'result-item';
-            row.innerHTML = `<strong>${esc(c.name)}</strong><span>${esc(c.mobile)} · ${esc(c.category)}</span>`;
-            row.onclick = () => selectCustomer(c);
-            box.appendChild(row);
-        });
-        box.classList.remove('hidden');
-    }
-
-    function selectCustomer(c) {
-        draft.customer = c;
-        $('bill-customer-search').value = '';
-        $('bill-customer-results').classList.add('hidden');
-        const box = $('bill-selected-customer');
-        box.innerHTML = `<strong>${esc(c.name)}</strong><span>${esc(c.mobile)} · ${esc(c.category)}</span>`;
-        box.classList.remove('hidden');
-        render();
+            <div><span>Garments</span><strong>${totalPieces}</strong></div>
+            <div class="grand"><span>Sub Total</span><strong>${formatCurrency(totalAmount)}</strong></div>`;
     }
 
     // ── Actions ────────────────────────────────────────────────────────────
@@ -289,16 +332,16 @@
         if (draft.cart.length === 0) return toast('Add at least one service to the cart.', 'error');
 
         // The bill number comes from the shared counter, so it is unique across
-        // every phone and this desktop. No connection means no number.
+        // every phone and every desktop. No connection means no number.
         const numRes = await window.api.allocateBillNumber();
         if (!numRes.success) {
             return toast('No internet connection — a bill number cannot be reserved.', 'error');
         }
 
         const billId = formatBillId(datePrefixToday(), numRes.data);
-        const dueDateRaw = $('bill-due-date').value;
-        const dueDate = dueDateRaw
-            ? new Date(dueDateRaw).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })
+        const dueRaw = $('bill-due-date').value;
+        const dueDate = dueRaw
+            ? new Date(dueRaw).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })
             : null;
 
         const bill = {
@@ -323,7 +366,7 @@
         if (saved === null) return;
 
         lastBill = bill;
-        close();
+        reset();
         await window.App.refreshBills();
         window.Bills.render();
         showConfirmation(bill);
@@ -333,10 +376,10 @@
         $('confirm-body').innerHTML = `
             <div class="kv"><span>Bill No</span><strong>${esc(bill.id)}</strong></div>
             <div class="kv"><span>Customer</span><strong>${esc(bill.customerName)}</strong></div>
-            <div class="kv"><span>Items</span><strong>${bill.totalClothesCount}</strong></div>
+            <div class="kv"><span>Garments</span><strong>${bill.totalClothesCount}</strong></div>
             <div class="kv"><span>Weight</span><strong>${bill.totalWeight} kg</strong></div>
             <div class="kv grand"><span>Total</span><strong>${formatCurrency(bill.totalAmount)}</strong></div>
-            <p class="help">The receipt below opens in WhatsApp, identical to what the phones send.</p>`;
+            <p class="help" style="margin-top:0.85rem">The receipt sent below is identical to what the phones send.</p>`;
         $('confirm-modal').classList.remove('hidden');
     }
 
@@ -348,21 +391,35 @@
     }
 
     function bind() {
-        // The "+ New Bill" button lives in the top bar and is wired by app.js,
-        // which swaps its action per tab.
-        $('btn-cancel-order').onclick = close;
         $('btn-add-to-cart').onclick = addToCart;
         $('btn-generate-bill').onclick = generateBill;
+        $('btn-clear-cart').onclick = () => {
+            if (draft.cart.length && !confirm('Clear this order?')) return;
+            reset();
+        };
         $('btn-close-confirm').onclick = () => $('confirm-modal').classList.add('hidden');
         $('btn-send-whatsapp').onclick = sendWhatsApp;
-        $('bill-customer-search').oninput = (e) => searchCustomers(e.target.value);
+        $('btn-quick-customer').onclick = () => quickAddCustomer($('bill-customer-search').value);
+
+        const search = $('bill-customer-search');
+        search.oninput = (e) => searchCustomers(e.target.value);
+        search.onfocus = () => { if (!draft.customer) searchCustomers(search.value); };
+
+        // Clicking away closes the dropdown, but not when the click is on the
+        // dropdown itself — that would cancel the selection before it registers.
+        document.addEventListener('mousedown', (e) => {
+            const box = $('bill-customer-results');
+            if (box.classList.contains('hidden')) return;
+            if (e.target === search || box.contains(e.target)) return;
+            box.classList.add('hidden');
+        });
+
         $('bill-weight').oninput = (e) => {
             draft.weight = e.target.value.replace(/[^0-9.]/g, '');
             e.target.value = draft.weight;
-            $('bill-rate-hint').textContent =
-                `Rate for ${currentCategory()}: ₹${kgRate()}/kg → subtotal ${formatCurrency(currentSubtotal())}`;
+            updateRateHint();
         };
     }
 
-    window.Billing = { bind, open };
+    window.Billing = { bind, render, reset };
 })();

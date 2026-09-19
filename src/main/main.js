@@ -23,6 +23,15 @@ function createWindow() {
     }
   });
 
+  // Surface renderer errors in the terminal. There is no devtools in the
+  // packaged app, so without this a renderer exception is completely silent —
+  // the UI just stops responding with no clue why.
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level >= 2) {
+      console.error(`[renderer] ${message}  (${sourceId}:${line})`);
+    }
+  });
+
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 }
 

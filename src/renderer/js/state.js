@@ -60,6 +60,50 @@ function toast(message, kind = 'info') {
     toastTimer = setTimeout(() => node.classList.add('hidden'), 3200);
 }
 
+/**
+ * Replacement for window.prompt, which Electron does not implement — calling it
+ * throws "prompt() is and will not be supported", which is why renaming used to
+ * fail silently. Resolves to the trimmed string, or null if cancelled.
+ */
+function askText({ title, help, value = '', okLabel = 'Save' }) {
+    return new Promise((resolve) => {
+        const overlay = $('prompt-modal');
+        const input = $('prompt-input');
+        const form = $('prompt-form');
+
+        $('prompt-title').textContent = title;
+        $('prompt-help').textContent = help || '';
+        $('prompt-help').classList.toggle('hidden', !help);
+        $('btn-prompt-ok').textContent = okLabel;
+        input.value = value;
+
+        const done = (result) => {
+            overlay.classList.add('hidden');
+            form.onsubmit = null;
+            $('btn-prompt-cancel').onclick = null;
+            overlay.onmousedown = null;
+            document.removeEventListener('keydown', onKey);
+            resolve(result);
+        };
+
+        const onKey = (e) => { if (e.key === 'Escape') done(null); };
+
+        form.onsubmit = (e) => {
+            e.preventDefault();
+            const text = input.value.trim();
+            done(text.length ? text : null);
+        };
+        $('btn-prompt-cancel').onclick = () => done(null);
+        // Click the backdrop (not the dialog itself) to dismiss.
+        overlay.onmousedown = (e) => { if (e.target === overlay) done(null); };
+        document.addEventListener('keydown', onKey);
+
+        overlay.classList.remove('hidden');
+        input.focus();
+        input.select();
+    });
+}
+
 /** Unwrap the {success, data|error} envelope every IPC handler returns. */
 async function call(promise, fallback = null) {
     const res = await promise;
@@ -104,7 +148,7 @@ function pricingFor(category) {
 }
 
 window.App = {
-    State, $, el, esc, icon, toast, call,
+    State, $, el, esc, icon, toast, call, askText,
     refreshBills, refreshCustomers, refreshExpenses, refreshPricing, refreshDevices,
     categoryNames, pricingFor,
 };
