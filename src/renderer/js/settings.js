@@ -25,6 +25,38 @@
         renderPills(cats);
         renderEditor(cats);
         renderDevices();
+        renderStorage();
+    }
+
+    // ── Storage location ───────────────────────────────────────────────────
+
+    async function renderStorage() {
+        const info = await call(window.api.getStorageInfo(), null);
+        const node = $('storage-path');
+        if (!info) { node.textContent = 'Unavailable'; return; }
+        node.innerHTML = `<code>${esc(info.directory)}</code>` +
+            (info.isDefault ? '<span class="chip">Default location</span>' : '');
+    }
+
+    async function chooseStorage() {
+        const result = await call(window.api.chooseStorage(), null);
+        if (!result || result.canceled) return;
+
+        await renderStorage();
+        toast(result.adopted
+            ? 'Switched to the existing data already in that folder.'
+            : 'Data folder moved. The previous file was kept as a .bak backup.');
+
+        // The database handle now points somewhere else, so every cached table
+        // in the renderer is stale.
+        await Promise.all([
+            window.App.refreshBills(),
+            window.App.refreshCustomers(),
+            window.App.refreshPricing(),
+        ]);
+        workingCopy = null;
+        render();
+        if (window.Bills) window.Bills.render();
     }
 
     function renderPills(cats) {
@@ -290,6 +322,7 @@
     function bind() {
         $('btn-add-category').onclick = addCategory;
         $('btn-save-pricing').onclick = savePricing;
+        $('btn-choose-storage').onclick = chooseStorage;
     }
 
     /** Drop local edits when the cloud pushes a newer config. */

@@ -1,8 +1,8 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const db = require('./database');
 const shared = require('./shared');
-const { initSync, allocateBillNumber, pushStatus } = require('./sync');
+const { initSync, allocateBillNumber } = require('./sync');
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -59,18 +59,23 @@ handle('db:addBill', (billData) => db.addBill(billData));
 handle('db:deleteBill', (billId) => { db.deleteBill(billId); });
 
 handle('db:updateBillStatus', async ({ id, status }) => {
+  const before = db.findBillById(id);
+  const wasCompleted = before && before.status === 'Completed';
+
   db.updateBillStatus(id, status);
   const bill = db.findBillById(id);
 
   // Marking a bill paid rolls its weight and amount into the customer's
-  // lifetime stats, exactly as the mobile app does.
-  if (bill && status === 'Completed' && bill.customerId) {
+  // lifetime stats, exactly as the mobile app does. Guarded against double
+  // counting if the same bill is completed twice.
+  if (bill && status === 'Completed' && !wasCompleted && bill.customerId) {
     await shared.addCustomerStats(bill.customerId, bill.totalWeight || 0, bill.totalAmount || 0);
   }
 
-  // Route the change back to the phone that created the bill, if any.
-  if (bill && bill.createdByDevice) {
-    await pushStatus(id, status, bill.completedAt, bill.createdByDevice).catch(() => {});
+  // Tell every phone, not just the one that raised the bill — any of them may
+  // be holding a copy pulled down via search.
+  if (bill) {
+    await shared.broadcastStatus(id, status, bill.completedAt).catch(() => {});
   }
 });
 
@@ -97,7 +102,28 @@ handle('devices:forget', (deviceId) => shared.forgetDevice(deviceId));
 
 // ── Reporting ──────────────────────────────────────────────────────────────
 
-handle('stats:revenue', (days) => db.getRevenueStats(days || 30));
+handle('stats:revenue', (opts) => db.getRevenueStats(opts || {}));
+
+// ── Storage location ───────────────────────────────────────────────────────
+
+handle('storage:get', () => db.getStorageInfo());
+
+/**
+ * Ask the user for a folder, then move the data folder there. The dialog is
+ * modal on the main window so the app can't be edited mid-move.
+ */
+handle('storage:choose', async () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Choose where to keep Wrinkle Laundry data',
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: 'Store data here',
+  });
+  if (result.canceled || !result.filePaths.length) return { canceled: true };
+
+  const moved = db.relocateStorage(result.filePaths[0]);
+  return { canceled: false, ...moved };
+});
 
 // ── WhatsApp ───────────────────────────────────────────────────────────────
 

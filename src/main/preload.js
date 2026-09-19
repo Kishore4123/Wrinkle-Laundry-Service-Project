@@ -25,7 +25,11 @@ contextBridge.exposeInMainWorld('api', {
   forgetDevice: (deviceId) => ipcRenderer.invoke('devices:forget', deviceId),
 
   // Reporting
-  getRevenueStats: (days) => ipcRenderer.invoke('stats:revenue', days),
+  getRevenueStats: (opts) => ipcRenderer.invoke('stats:revenue', opts),
+
+  // Storage location
+  getStorageInfo: () => ipcRenderer.invoke('storage:get'),
+  chooseStorage: () => ipcRenderer.invoke('storage:choose'),
 
   // WhatsApp
   sendWhatsApp: (mobile, message) => ipcRenderer.invoke('app:sendWhatsApp', { mobile, message }),

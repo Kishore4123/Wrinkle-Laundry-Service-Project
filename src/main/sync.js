@@ -37,32 +37,41 @@ async function initSync({ onChange }) {
     console.warn('[Sync] pricing seed skipped:', e.message));
 
   // Mobile -> desktop: ingest each bill into SQLite, then delete the doc.
+  //
+  // Changes are processed one at a time through a promise chain. forEach with an
+  // async callback does not await, so two snapshots arriving close together used
+  // to process the same document concurrently.
+  let ingestQueue = Promise.resolve();
   onSnapshot(
     collection(fs, 'bills_inbox'),
     (snap) => {
-      snap.docChanges().forEach(async (change) => {
-        if (change.type === 'removed') return;
-        try {
-          db.addBill(change.doc.data());
-          await deleteDoc(doc(fs, 'bills_inbox', change.doc.id));
-          if (onChange) onChange();
-        } catch (e) {
-          console.error('[Sync] ingest failed for', change.doc.id, e.message);
-        }
-      });
+      for (const change of snap.docChanges()) {
+        if (change.type === 'removed') continue;
+        ingestQueue = ingestQueue.then(async () => {
+          try {
+            db.addBill(change.doc.data());
+            await deleteDoc(doc(fs, 'bills_inbox', change.doc.id));
+            if (onChange) onChange();
+          } catch (e) {
+            console.error('[Sync] ingest failed for', change.doc.id, e.message);
+          }
+        });
+      }
     },
     (err) => console.error('[Sync] bills_inbox listener error:', err.message)
   );
 
   // Mobile -> desktop: answer lookups from the archive, then delete the request.
+  let searchQueue = Promise.resolve();
   onSnapshot(
     collection(fs, 'search_requests'),
     (snap) => {
-      snap.docChanges().forEach(async (change) => {
-        if (change.type === 'removed') return;
+      for (const change of snap.docChanges()) {
+        if (change.type === 'removed') continue;
         const req = change.doc.data();
         const requestId = change.doc.id;
-        if (!req.deviceId) return;
+        if (!req.deviceId) continue;
+        searchQueue = searchQueue.then(async () => {
         try {
           const query = String(req.query || '').trim();
           // Exact bill ID first, then exact phone number. Deliberately narrow —
@@ -79,7 +88,8 @@ async function initSync({ onChange }) {
         } catch (e) {
           console.error('[Sync] search failed for', requestId, e.message);
         }
-      });
+        });
+      }
     },
     (err) => console.error('[Sync] search_requests listener error:', err.message)
   );
@@ -96,17 +106,7 @@ async function allocateBillNumber() {
   });
 }
 
-/** Desktop -> the one mobile device that created the bill. */
-async function pushStatus(billId, status, completedAt, deviceId) {
-  if (!fs || !deviceId) return;
-  const messageId = `status-${billId}-${Date.now()}`;
-  await setDoc(doc(fs, 'device_inbox', deviceId, 'messages', messageId), {
-    type: 'status',
-    billId,
-    status,
-    completedAt: completedAt || null,
-    sentAt: Date.now(),
-  });
-}
+// Status changes are broadcast to every registered phone by shared.js, which
+// owns the device registry.
 
-module.exports = { initSync, allocateBillNumber, pushStatus };
+module.exports = { initSync, allocateBillNumber };

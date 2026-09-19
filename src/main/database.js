@@ -1,15 +1,49 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fsx = require('fs');
 const { app } = require('electron');
 
-// Get path to user data directory for persistence
-const dbPath = path.join(app.getPath('userData'), 'wrinkle-laundry.db');
-const db = new Database(dbPath, { verbose: console.log });
+const DB_NAME = 'wrinkle-laundry.db';
+const FOLDER_NAME = 'WrinkleLaundry';
 
-// Initialize database schema
+// Where the data folder lives is user-configurable, so the pointer to it must
+// NOT live in the data folder. It always stays in userData.
+function locationConfigPath() {
+  return path.join(app.getPath('userData'), 'storage-location.json');
+}
+
+function readStorageDir() {
+  try {
+    const { directory } = JSON.parse(fsx.readFileSync(locationConfigPath(), 'utf8'));
+    if (directory && fsx.existsSync(directory)) return directory;
+  } catch (e) {
+    // No config yet, or it points somewhere that no longer exists (an unplugged
+    // drive, a deleted folder). Fall back rather than refusing to start.
+  }
+  return app.getPath('userData');
+}
+
+function writeStorageDir(directory) {
+  fsx.writeFileSync(locationConfigPath(), JSON.stringify({ directory }, null, 2));
+}
+
+let db = null;
+let currentDir = null;
+
+function open(directory) {
+  if (db) {
+    try { db.close(); } catch (e) {}
+    db = null;
+  }
+  fsx.mkdirSync(directory, { recursive: true });
+  db = new Database(path.join(directory, DB_NAME));
+  currentDir = directory;
+  initDB();
+}
+
 function initDB() {
   // Main bills table — columns aligned to what the mobile app sends
-  const createBillsTable = `
+  db.exec(`
     CREATE TABLE IF NOT EXISTS bills (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       billId TEXT UNIQUE,
@@ -26,13 +60,12 @@ function initDB() {
       createdAt INTEGER,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )
-  `;
-  db.exec(createBillsTable);
+  `);
 
   // Add columns that may not exist on older DBs (safe migration)
   const columnsToAdd = [
-    { name: 'customerCategory', type: 'TEXT DEFAULT \'Student\'' },
-    { name: 'cartItems', type: 'TEXT DEFAULT \'[]\'' },
+    { name: 'customerCategory', type: "TEXT DEFAULT 'Student'" },
+    { name: 'cartItems', type: "TEXT DEFAULT '[]'" },
     { name: 'totalWeight', type: 'REAL DEFAULT 0' },
     { name: 'totalClothesCount', type: 'INTEGER DEFAULT 0' },
     { name: 'dueDate', type: 'TEXT' },
@@ -73,18 +106,149 @@ function initDB() {
       updatedAt INTEGER
     )
   `);
+
+  // Immutable record of money actually collected.
+  //
+  // Deliberately separate from `bills`: deleting a bill is a bookkeeping action
+  // on the order, and must never rewrite history by erasing revenue that was
+  // genuinely taken. Every revenue figure in the app reads from here, never
+  // from the bills table.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS revenue_ledger (
+      billId TEXT PRIMARY KEY,
+      amount REAL NOT NULL DEFAULT 0,
+      weight REAL DEFAULT 0,
+      customerCategory TEXT,
+      customerId TEXT,
+      customerName TEXT,
+      services TEXT DEFAULT '[]',
+      collectedAt INTEGER NOT NULL
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_ledger_collected ON revenue_ledger (collectedAt)');
+
+  backfillLedger();
 }
 
-initDB();
+/**
+ * One-time catch-up for databases that predate the ledger: any bill already
+ * marked Completed gets an entry, so upgrading doesn't show zero revenue.
+ */
+function backfillLedger() {
+  const already = db.prepare('SELECT COUNT(*) AS n FROM revenue_ledger').get().n;
+  if (already > 0) return;
+  const completed = db.prepare("SELECT * FROM bills WHERE status = 'Completed'").all();
+  for (const bill of completed) {
+    recordRevenue({ ...bill, cartItems: safeJsonParse(bill.cartItems, []) });
+  }
+}
+
+function collectedTimestamp(bill) {
+  const fromCompleted = bill.completedAt ? Date.parse(bill.completedAt) : NaN;
+  if (Number.isFinite(fromCompleted)) return fromCompleted;
+  if (Number.isFinite(bill.createdAt)) return bill.createdAt;
+  const fromTimestamp = bill.timestamp ? Date.parse(bill.timestamp) : NaN;
+  return Number.isFinite(fromTimestamp) ? fromTimestamp : Date.now();
+}
+
+/** Idempotent on billId — completing an already-recorded bill updates, never duplicates. */
+function recordRevenue(bill) {
+  const services = (bill.cartItems || []).map((ci) => ({
+    serviceType: ci.serviceType || 'OTHER',
+    subtotal: ci.subtotal || 0,
+  }));
+
+  db.prepare(`
+    INSERT INTO revenue_ledger (billId, amount, weight, customerCategory, customerId, customerName, services, collectedAt)
+    VALUES (@billId, @amount, @weight, @customerCategory, @customerId, @customerName, @services, @collectedAt)
+    ON CONFLICT(billId) DO UPDATE SET
+      amount = excluded.amount,
+      weight = excluded.weight,
+      customerCategory = excluded.customerCategory,
+      customerId = excluded.customerId,
+      customerName = excluded.customerName,
+      services = excluded.services,
+      collectedAt = excluded.collectedAt
+  `).run({
+    billId: bill.billId || bill.id,
+    amount: bill.totalAmount || 0,
+    weight: bill.totalWeight || 0,
+    customerCategory: bill.customerCategory || 'Student',
+    customerId: bill.customerId || null,
+    customerName: bill.customerName || null,
+    services: JSON.stringify(services),
+    collectedAt: collectedTimestamp(bill),
+  });
+}
+
+open(readStorageDir());
+
+function safeJsonParse(str, fallback) {
+  try { return JSON.parse(str); } catch (e) { return fallback; }
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+function dayKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
+function monthKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; }
+function yearKey(d) { return String(d.getFullYear()); }
 
 module.exports = {
+  // ── Storage location ────────────────────────────────────────────────────
+
+  getStorageInfo: () => ({
+    directory: currentDir,
+    dbPath: path.join(currentDir, DB_NAME),
+    isDefault: currentDir === app.getPath('userData'),
+  }),
+
+  /**
+   * Move the data folder to a directory the user picked. Creates a
+   * "WrinkleLaundry" folder inside it, copies the database across, then
+   * switches to it. The old file is renamed rather than deleted so a failed
+   * move is always recoverable.
+   */
+  relocateStorage: (targetParent) => {
+    const targetDir = path.join(targetParent, FOLDER_NAME);
+    const targetDb = path.join(targetDir, DB_NAME);
+    const sourceDb = path.join(currentDir, DB_NAME);
+
+    if (path.resolve(targetDir) === path.resolve(currentDir)) {
+      return { directory: currentDir, dbPath: sourceDb, moved: false };
+    }
+
+    fsx.mkdirSync(targetDir, { recursive: true });
+
+    // If the target already holds a database, adopt it rather than overwriting —
+    // re-selecting a folder used previously should resume that data, not destroy it.
+    const adopting = fsx.existsSync(targetDb);
+
+    if (db) { try { db.close(); } catch (e) {} db = null; }
+
+    if (!adopting) {
+      fsx.copyFileSync(sourceDb, targetDb);
+      // Copy sidecar files too if the journal mode ever produces them.
+      for (const suffix of ['-wal', '-shm']) {
+        if (fsx.existsSync(sourceDb + suffix)) fsx.copyFileSync(sourceDb + suffix, targetDb + suffix);
+      }
+    }
+
+    open(targetDir);
+    writeStorageDir(targetDir);
+
+    if (!adopting && fsx.existsSync(sourceDb)) {
+      try { fsx.renameSync(sourceDb, sourceDb + '.bak'); } catch (e) {}
+    }
+
+    return { directory: targetDir, dbPath: targetDb, moved: true, adopted: adopting };
+  },
+
+  // ── Bills ───────────────────────────────────────────────────────────────
+
   getBills: () => {
-    const stmt = db.prepare('SELECT * FROM bills ORDER BY timestamp DESC');
-    const rows = stmt.all();
-    return rows.map(row => ({
+    const rows = db.prepare('SELECT * FROM bills ORDER BY timestamp DESC').all();
+    return rows.map((row) => ({
       ...row,
       cartItems: safeJsonParse(row.cartItems, []),
-      // Keep legacy 'items' field parsed too if it exists
       items: row.items ? safeJsonParse(row.items, []) : undefined,
     }));
   },
@@ -96,12 +260,12 @@ module.exports = {
    *   DB expects:   { billId, customerName, phone, cartItems, totalAmount, status, ... }
    */
   addBill: (bill) => {
-    // Map mobile field names → DB field names
     const billId = bill.billId || bill.id || ('SYNC-' + Date.now());
     const customerName = bill.customerName || bill.studentName || 'Unknown';
     const phone = bill.phone || bill.mobile || '';
     const customerCategory = bill.customerCategory || 'Student';
-    const cartItems = JSON.stringify(bill.cartItems || bill.items || []);
+    const cartItemsArr = bill.cartItems || bill.items || [];
+    const cartItems = JSON.stringify(cartItemsArr);
     const totalWeight = bill.totalWeight || bill.weight || 0;
     const totalClothesCount = bill.totalClothesCount || bill.clothesCount || 0;
     const totalAmount = bill.totalAmount || 0;
@@ -116,56 +280,58 @@ module.exports = {
     // roll the amount into that customer's lifetime stats.
     const customerId = bill.customerId || bill.studentId || null;
 
-    // Check if bill already exists (upsert)
-    const checkStmt = db.prepare('SELECT id FROM bills WHERE billId = ?');
-    const existing = checkStmt.get(billId);
-
-    if (existing) {
-      // Update existing bill
-      const updateStmt = db.prepare(`
-        UPDATE bills SET
-          customerName = ?,
-          customerCategory = ?,
-          phone = ?,
-          cartItems = ?,
-          totalWeight = ?,
-          totalClothesCount = ?,
-          totalAmount = ?,
-          dueDate = ?,
-          status = ?,
-          completedAt = ?,
-          createdAt = ?,
-          timestamp = ?,
-          createdByDevice = COALESCE(?, createdByDevice),
-          customerId = COALESCE(?, customerId)
-        WHERE billId = ?
-      `);
-      updateStmt.run(
-        customerName, customerCategory, phone, cartItems,
-        totalWeight, totalClothesCount, totalAmount,
-        dueDate, status, completedAt, createdAt, timestamp, createdByDevice, customerId, billId
-      );
-      return existing.id;
-    }
-
-    // Insert new bill
-    const insertStmt = db.prepare(`
+    // A single atomic upsert rather than check-then-insert: Firestore can
+    // deliver the same document to two overlapping snapshot callbacks, and the
+    // old read-then-write pattern lost that race with a UNIQUE constraint error.
+    db.prepare(`
       INSERT INTO bills (billId, customerName, customerCategory, phone, cartItems,
-        totalWeight, totalClothesCount, totalAmount, dueDate, status, completedAt, createdAt, timestamp, createdByDevice, customerId)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const info = insertStmt.run(
+        totalWeight, totalClothesCount, totalAmount, dueDate, status, completedAt,
+        createdAt, timestamp, createdByDevice, customerId)
+      VALUES (@billId, @customerName, @customerCategory, @phone, @cartItems,
+        @totalWeight, @totalClothesCount, @totalAmount, @dueDate, @status, @completedAt,
+        @createdAt, @timestamp, @createdByDevice, @customerId)
+      ON CONFLICT(billId) DO UPDATE SET
+        customerName = excluded.customerName,
+        customerCategory = excluded.customerCategory,
+        phone = excluded.phone,
+        cartItems = excluded.cartItems,
+        totalWeight = excluded.totalWeight,
+        totalClothesCount = excluded.totalClothesCount,
+        totalAmount = excluded.totalAmount,
+        dueDate = excluded.dueDate,
+        status = excluded.status,
+        completedAt = excluded.completedAt,
+        createdAt = excluded.createdAt,
+        timestamp = excluded.timestamp,
+        createdByDevice = COALESCE(excluded.createdByDevice, bills.createdByDevice),
+        customerId = COALESCE(excluded.customerId, bills.customerId)
+    `).run({
       billId, customerName, customerCategory, phone, cartItems,
       totalWeight, totalClothesCount, totalAmount,
-      dueDate, status, completedAt, createdAt, timestamp, createdByDevice, customerId
-    );
-    return info.lastInsertRowid;
+      dueDate, status, completedAt, createdAt, timestamp, createdByDevice, customerId,
+    });
+
+    // A bill can arrive from a phone already marked paid, so the ledger is
+    // written here too — not only when this desktop completes a bill itself.
+    if (status === 'Completed') {
+      recordRevenue({
+        billId, totalAmount, totalWeight, customerCategory, customerId,
+        customerName, cartItems: cartItemsArr, completedAt, createdAt, timestamp,
+      });
+    }
+
+    return billId;
   },
 
   updateBillStatus: (billId, status) => {
     const completedAt = status === 'Completed' ? new Date().toISOString() : null;
-    const stmt = db.prepare('UPDATE bills SET status = ?, completedAt = ? WHERE billId = ?');
-    stmt.run(status, completedAt, billId);
+    db.prepare('UPDATE bills SET status = ?, completedAt = ? WHERE billId = ?')
+      .run(status, completedAt, billId);
+
+    if (status === 'Completed') {
+      const bill = db.prepare('SELECT * FROM bills WHERE billId = ?').get(billId);
+      if (bill) recordRevenue({ ...bill, cartItems: safeJsonParse(bill.cartItems, []) });
+    }
   },
 
   findBillById: (billId) => {
@@ -179,6 +345,7 @@ module.exports = {
     return rows.map((row) => ({ ...row, cartItems: safeJsonParse(row.cartItems, []) }));
   },
 
+  /** Removes the order. The revenue ledger is deliberately left untouched. */
   deleteBill: (billId) => {
     db.prepare('DELETE FROM bills WHERE billId = ?').run(billId);
   },
@@ -230,8 +397,7 @@ module.exports = {
 
   getConfig: (key) => {
     const row = db.prepare('SELECT value FROM app_config WHERE key = ?').get(key);
-    if (!row) return null;
-    return safeJsonParse(row.value, null);
+    return row ? safeJsonParse(row.value, null) : null;
   },
 
   setConfig: (key, value) => {
@@ -241,62 +407,79 @@ module.exports = {
     `).run(key, JSON.stringify(value), Date.now());
   },
 
-  // ── Revenue reporting ───────────────────────────────────────────────────
+  // ── Revenue reporting (always from the ledger) ──────────────────────────
 
   /**
-   * Revenue per calendar day over the last N days, plus headline totals.
-   * Only completed bills count toward revenue — pending ones aren't paid yet.
+   * @param {object} opts
+   *   mode  — 'days' | 'months' | 'years'
+   *   count — how many buckets back from now (days: 30, months: 12, years: 5)
+   *
+   * Revenue figures come from revenue_ledger so deleting a bill never reduces
+   * them. Pending figures come from the bills table, because an unpaid bill is
+   * a live order rather than history.
    */
-  getRevenueStats: (days = 30) => {
-    const since = Date.now() - days * 24 * 60 * 60 * 1000;
-    const bills = db.prepare('SELECT * FROM bills').all();
+  getRevenueStats: ({ mode = 'days', count = 30 } = {}) => {
+    const entries = db.prepare('SELECT * FROM revenue_ledger').all();
+    const bills = db.prepare('SELECT status, totalAmount FROM bills').all();
 
-    const billDate = (b) => {
-      const ts = b.createdAt || (b.timestamp ? Date.parse(b.timestamp) : null);
-      return Number.isFinite(ts) ? ts : null;
-    };
+    const buckets = new Map();
+    const now = new Date();
 
-    const byDay = new Map();
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
-      byDay.set(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
-        { revenue: 0, bills: 0 });
+    if (mode === 'months') {
+      for (let i = count - 1; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        buckets.set(monthKey(d), { revenue: 0, bills: 0 });
+      }
+    } else if (mode === 'years') {
+      for (let i = count - 1; i >= 0; i--) {
+        buckets.set(String(now.getFullYear() - i), { revenue: 0, bills: 0 });
+      }
+    } else {
+      for (let i = count - 1; i >= 0; i--) {
+        const d = new Date(now.getTime() - i * 86400000);
+        buckets.set(dayKey(d), { revenue: 0, bills: 0 });
+      }
     }
 
-    let totalRevenue = 0, completedCount = 0, pendingCount = 0, pendingValue = 0;
+    const keyFor = mode === 'months' ? monthKey : mode === 'years' ? yearKey : dayKey;
+
+    let totalRevenue = 0;
     const byCategory = new Map();
     const byService = new Map();
 
-    for (const b of bills) {
-      const amount = b.totalAmount || 0;
-      const isComplete = (b.status || 'Pending') === 'Completed';
-      if (isComplete) {
-        totalRevenue += amount;
-        completedCount++;
-        const cat = b.customerCategory || 'Student';
-        byCategory.set(cat, (byCategory.get(cat) || 0) + amount);
-        for (const ci of safeJsonParse(b.cartItems, [])) {
-          const svc = ci.serviceType || 'OTHER';
-          byService.set(svc, (byService.get(svc) || 0) + (ci.subtotal || 0));
-        }
-      } else {
-        pendingCount++;
-        pendingValue += amount;
+    for (const entry of entries) {
+      totalRevenue += entry.amount || 0;
+
+      const cat = entry.customerCategory || 'Student';
+      byCategory.set(cat, (byCategory.get(cat) || 0) + (entry.amount || 0));
+
+      for (const svc of safeJsonParse(entry.services, [])) {
+        const name = svc.serviceType || 'OTHER';
+        byService.set(name, (byService.get(name) || 0) + (svc.subtotal || 0));
       }
 
-      const ts = billDate(b);
-      if (ts && ts >= since && isComplete) {
-        const d = new Date(ts);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        const slot = byDay.get(key);
-        if (slot) { slot.revenue += amount; slot.bills += 1; }
+      const slot = buckets.get(keyFor(new Date(entry.collectedAt)));
+      if (slot) { slot.revenue += entry.amount || 0; slot.bills += 1; }
+    }
+
+    let pendingCount = 0, pendingValue = 0;
+    for (const b of bills) {
+      if ((b.status || 'Pending') !== 'Completed') {
+        pendingCount++;
+        pendingValue += b.totalAmount || 0;
       }
     }
 
+    const series = Array.from(buckets, ([key, v]) => ({ key, ...v }));
+
     return {
-      daily: Array.from(byDay, ([date, v]) => ({ date, ...v })),
+      mode,
+      series,
+      // Sum over the visible window, so the tile matches the chart.
+      windowRevenue: series.reduce((s, b) => s + b.revenue, 0),
+      windowBills: series.reduce((s, b) => s + b.bills, 0),
       totalRevenue,
-      completedCount,
+      collectedCount: entries.length,
       pendingCount,
       pendingValue,
       totalBills: bills.length,
@@ -307,7 +490,3 @@ module.exports = {
     };
   },
 };
-
-function safeJsonParse(str, fallback) {
-  try { return JSON.parse(str); } catch (e) { return fallback; }
-}

@@ -118,6 +118,35 @@ function listDevices() {
   return deviceCache;
 }
 
+/**
+ * Tell every registered phone that a bill's status changed.
+ *
+ * Broadcast rather than addressed to the originating device: with several
+ * phones in the shop, any of them may have pulled the bill down via search,
+ * and each applies the update only if it actually holds that bill.
+ */
+async function broadcastStatus(billId, status, completedAt) {
+  if (!fs) return 0;
+  const targets = deviceCache.filter((d) => !d.isDesktop && d.deviceId);
+  let sent = 0;
+  for (const device of targets) {
+    const messageId = `status-${billId}-${Date.now()}`;
+    try {
+      await setDoc(doc(fs, 'device_inbox', device.deviceId, 'messages', messageId), {
+        type: 'status',
+        billId,
+        status,
+        completedAt: completedAt || null,
+        sentAt: Date.now(),
+      });
+      sent++;
+    } catch (e) {
+      console.warn('[Shared] status push failed for', device.deviceId, e.message);
+    }
+  }
+  return sent;
+}
+
 async function setDevicePermission(deviceId, canCustomize) {
   if (!fs) throw new Error('Not connected to the cloud.');
   await setDoc(doc(fs, 'devices', deviceId), { canCustomize: !!canCustomize }, { merge: true });
@@ -169,6 +198,7 @@ module.exports = {
   removeCustomer,
   addCustomerStats,
   listDevices,
+  broadcastStatus,
   setDevicePermission,
   renameDevice,
   forgetDevice,

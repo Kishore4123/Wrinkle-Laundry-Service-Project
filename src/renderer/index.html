@@ -115,9 +115,12 @@
                 <h2 class="panel-title">Revenue Dashboard</h2>
                 <div class="toolbar-actions">
                     <select id="revenue-range" class="select-input">
-                        <option value="7">Last 7 days</option>
-                        <option value="30" selected>Last 30 days</option>
-                        <option value="90">Last 90 days</option>
+                        <option value="days:7">Last 7 days</option>
+                        <option value="days:30" selected>Last 30 days</option>
+                        <option value="days:90">Last 90 days</option>
+                        <option value="months:6">Last 6 months</option>
+                        <option value="months:12">Month-wise (12 months)</option>
+                        <option value="years:5">Year-wise (5 years)</option>
                     </select>
                 </div>
             </div>
@@ -140,7 +143,18 @@
                     </div>
                 </div>
                 <div class="settings-col">
-                    <h2 class="panel-title">Device Control</h2>
+                    <h2 class="panel-title">Storage Location</h2>
+                    <div class="glass card-pad">
+                        <p class="help-text">
+                            Where this computer keeps its bill archive. Choosing a new folder
+                            creates a <strong>WrinkleLaundry</strong> folder inside it and moves
+                            the data across.
+                        </p>
+                        <div class="storage-path" id="storage-path">Loading...</div>
+                        <button class="btn secondary full-width" id="btn-choose-storage">Change Folder</button>
+                    </div>
+
+                    <h2 class="panel-title" style="margin-top:1.5rem;">Device Control</h2>
                     <div class="glass card-pad">
                         <p class="help-text">
                             Devices appear here once they connect. Turn on <strong>Can edit pricing</strong>
