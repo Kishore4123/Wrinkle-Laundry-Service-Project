@@ -255,10 +255,20 @@
                                 </p>
                                 <div class="path-box" id="storage-path">Loading...</div>
                                 <div class="inline-form">
-                                    <button class="btn ghost" id="btn-onedrive">Store in OneDrive</button>
                                     <button class="btn ghost" id="btn-choose-storage">Choose Folder</button>
+                                    <button class="btn ghost" id="btn-backup-now">Back Up Now</button>
                                 </div>
                                 <p class="help" id="onedrive-note"></p>
+                                <div class="warn-box hidden" id="cloud-warning">
+                                    <strong>This folder is synced by OneDrive.</strong>
+                                    <p class="help">
+                                        OneDrive skips files that are open, and the app holds the database
+                                        open the whole time it runs — so it only syncs after you close the
+                                        app. Keep the live database on this computer and let the app write
+                                        a backup into OneDrive instead.
+                                    </p>
+                                    <button class="btn primary" id="btn-fix-cloud">Move Local + Back Up to OneDrive</button>
+                                </div>
                             </div>
                         </div>
 
@@ -323,6 +333,18 @@
                 <button type="submit" class="btn primary">Save Expense</button>
             </div>
         </form>
+    </div>
+</div>
+
+<!-- ── Bill detail ─────────────────────────────────────────────────── -->
+<div class="overlay hidden" id="detail-modal">
+    <div class="modal wide-md">
+        <h2 id="detail-title">Bill</h2>
+        <div id="detail-body"></div>
+        <div class="modal-actions">
+            <button type="button" class="btn ghost" id="btn-close-detail">Close</button>
+            <button type="button" class="btn whatsapp" id="btn-detail-whatsapp">Send on WhatsApp</button>
+        </div>
     </div>
 </div>
 

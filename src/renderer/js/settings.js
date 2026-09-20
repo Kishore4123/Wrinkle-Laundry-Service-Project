@@ -35,21 +35,50 @@
         const node = $('storage-path');
         if (!info) { node.textContent = 'Unavailable'; return; }
 
+        // A live database inside a cloud-synced folder is the failure case:
+        // OneDrive skips open files, so it only syncs once the app closes.
         const onOneDrive = info.oneDrive &&
             info.directory.toLowerCase().startsWith(info.oneDrive.toLowerCase());
 
         node.innerHTML = `<code>${esc(info.directory)}</code>`
-            + (info.isDefault ? '<span class="badge neutral">Default location</span>' : '')
-            + (onOneDrive ? '<span class="badge completed">Syncing via OneDrive</span>' : '');
+            + (info.isDefault ? '<span class="badge neutral">On this computer</span>' : '')
+            + (onOneDrive ? '<span class="badge pending">Inside OneDrive</span>' : '');
 
-        const btn = $('btn-onedrive');
-        btn.classList.toggle('hidden', !info.oneDrive || onOneDrive);
+        $('cloud-warning').classList.toggle('hidden', !onOneDrive);
 
-        $('onedrive-note').textContent = info.oneDrive
-            ? (onOneDrive
-                ? 'OneDrive backs this folder up automatically. Other Command Centers stay in step through the cloud sync, not through this folder.'
-                : `OneDrive found at ${info.oneDrive}`)
-            : 'OneDrive was not detected on this computer. You can still pick any folder manually.';
+        const backup = await call(window.api.backupInfo(), null);
+        $('btn-backup-now').classList.toggle('hidden', !backup || !backup.available);
+
+        if (!backup || !backup.available) {
+            $('onedrive-note').textContent =
+                'OneDrive was not detected on this computer, so automatic backups are off. You can still pick any folder for the database.';
+        } else if (backup.last) {
+            const when = new Date(backup.last.at).toLocaleString('en-IN');
+            $('onedrive-note').textContent =
+                `Backing up to ${backup.directory}. Last backup ${when} (${Math.round(backup.last.size / 1024)} KB). Runs every 10 minutes and when you close the app.`;
+        } else {
+            $('onedrive-note').textContent =
+                `Backups go to ${backup.directory}, every 10 minutes and when you close the app.`;
+        }
+    }
+
+    async function backupNow() {
+        const res = await call(window.api.backupNow(), null);
+        if (res === null) return;
+        await renderStorage();
+        toast('Backup written to OneDrive.');
+    }
+
+    /** Repair for a database that was previously moved into OneDrive. */
+    async function fixCloudStorage() {
+        if (!confirm(
+            'Move the live database back onto this computer and back it up to OneDrive instead?\n\n'
+            + 'Your data is not changed — only where the working file lives.'
+        )) return;
+        const result = await call(window.api.useLocalPlusBackup(), null);
+        if (result === null) return;
+        await afterRelocate(result);
+        toast('Database moved locally. OneDrive now receives backups.');
     }
 
     async function chooseStorage() {
@@ -345,14 +374,8 @@
         $('btn-add-category').onclick = addCategory;
         $('btn-save-pricing').onclick = savePricing;
         $('btn-choose-storage').onclick = chooseStorage;
-        $('btn-onedrive').onclick = useOneDrive;
-    }
-
-    async function useOneDrive() {
-        if (!confirm('Move the laundry data into your OneDrive folder?\n\nOneDrive will back it up automatically.')) return;
-        const result = await call(window.api.useOneDrive(), null);
-        if (result === null) return;
-        await afterRelocate(result);
+        $('btn-backup-now').onclick = backupNow;
+        $('btn-fix-cloud').onclick = fixCloudStorage;
     }
 
     /** Drop local edits when the cloud pushes a newer config. */

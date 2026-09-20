@@ -70,9 +70,20 @@ app.whenReady().then(() => {
     },
   }).catch((e) => console.error('[Sync] init failed:', e.message));
 
+  // Snapshot into OneDrive periodically and once shortly after launch, so the
+  // backup is never more than a few minutes behind without any user action.
+  setTimeout(() => { runBackup().catch(() => {}); }, 30_000);
+  setInterval(() => { runBackup().catch(() => {}); }, 10 * 60_000);
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+// A final snapshot on the way out, so closing the app always leaves OneDrive
+// holding the latest data.
+app.on('before-quit', () => {
+  try { runBackup(); } catch (e) {}
 });
 
 app.on('window-all-closed', function () {
@@ -96,12 +107,16 @@ function handle(channel, fn) {
 handle('db:getBills', () => db.getBills());
 handle('db:addBill', async (billData) => {
   const billId = db.addBill(billData);
-  // Share it with any other Command Center in the shop. Phones are unaffected —
-  // they pull bills on demand via search.
-  await shared.publishDeskBill(billData).catch(() => {});
+  // Publish to the shared archive so every Command Center holds the same
+  // history. A failure here is not fatal — the row stays unpublished and the
+  // next backfill pass picks it up.
+  await shared.publishBill(billData).catch((e) =>
+    console.warn('[IPC] bill publish deferred:', e.message));
   return billId;
 });
-handle('db:deleteBill', (billId) => { db.deleteBill(billId); });
+// Removes the order from every Command Center. The revenue ledger is
+// deliberately untouched — deleting an order must not erase money collected.
+handle('db:deleteBill', (billId) => shared.removeBillEverywhere(billId));
 
 handle('db:updateBillStatus', async ({ id, status }) => {
   const before = db.findBillById(id);
@@ -121,6 +136,9 @@ handle('db:updateBillStatus', async ({ id, status }) => {
   // be holding a copy pulled down via search.
   if (bill) {
     await shared.broadcastStatus(id, status, bill.completedAt).catch(() => {});
+    // And push the change plus its revenue entry to the other Command Centers.
+    await shared.publishPending().catch((e) =>
+      console.warn('[IPC] publish after status change deferred:', e.message));
   }
 });
 
@@ -188,11 +206,49 @@ function detectOneDrive() {
   return null;
 }
 
-/** One-click equivalent of picking the OneDrive folder in the file dialog. */
-handle('storage:useOneDrive', () => {
+// ── OneDrive backup ────────────────────────────────────────────────────────
+//
+// The live database deliberately does NOT live in OneDrive. SQLite keeps the
+// file open, and OneDrive skips open files — so a database kept there only
+// syncs after the app is closed, which is exactly the problem this replaces.
+// Instead a consistent snapshot is written into OneDrive, which syncs freely.
+
+const BACKUP_FOLDER = 'WrinkleLaundry Backup';
+let lastBackup = null;
+
+function backupDir() {
   const oneDrive = detectOneDrive();
-  if (!oneDrive) throw new Error('OneDrive does not appear to be set up on this computer.');
-  return db.relocateStorage(oneDrive);
+  return oneDrive ? path.join(oneDrive, BACKUP_FOLDER) : null;
+}
+
+async function runBackup() {
+  const dir = backupDir();
+  if (!dir) return null;
+  lastBackup = await db.backupTo(dir);
+  return lastBackup;
+}
+
+handle('storage:backupNow', async () => {
+  const dir = backupDir();
+  if (!dir) throw new Error('OneDrive does not appear to be set up on this computer.');
+  return runBackup();
+});
+
+handle('storage:backupInfo', () => ({
+  directory: backupDir(),
+  last: lastBackup,
+  available: !!detectOneDrive(),
+}));
+
+/**
+ * Move the live database back out of a cloud-synced folder and into local
+ * userData, then take a backup. This is the repair for a database that was
+ * previously relocated into OneDrive and therefore stopped syncing.
+ */
+handle('storage:useLocalPlusBackup', async () => {
+  const moved = db.relocateStorage(app.getPath('userData'));
+  const backup = await runBackup().catch(() => null);
+  return { ...moved, backup };
 });
 
 /**

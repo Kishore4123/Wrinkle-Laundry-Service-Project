@@ -36,6 +36,13 @@ async function initSync({ onChange, machineId, machineName }) {
   await shared.seedPricingIfAbsent().catch((e) =>
     console.warn('[Sync] pricing seed skipped:', e.message));
 
+  // Carry anything this machine holds but never published up to the shared
+  // archive. On a Command Center that ran before the archive existed, this is
+  // what uploads its whole history so a newly installed one can see it.
+  shared.publishPending()
+    .then(({ bills, ledger }) => { if ((bills || ledger) && onChange) onChange('bills'); })
+    .catch((e) => console.warn('[Sync] backfill deferred:', e.message));
+
   // Mobile -> desktop: ingest each bill into SQLite, then delete the doc.
   //
   // Changes are processed one at a time through a promise chain. forEach with an
@@ -49,7 +56,13 @@ async function initSync({ onChange, machineId, machineName }) {
         if (change.type === 'removed') continue;
         ingestQueue = ingestQueue.then(async () => {
           try {
-            db.addBill(change.doc.data());
+            const bill = change.doc.data();
+            db.addBill(bill);
+            // Republish to the durable shared archive before draining the
+            // mailbox. Without this the bill would exist only on whichever
+            // Command Center happened to consume it first.
+            await shared.publishBill(bill).catch((e) =>
+              console.warn('[Sync] archive publish deferred:', e.message));
             await deleteDoc(doc(fs, 'bills_inbox', change.doc.id));
             if (onChange) onChange();
           } catch (e) {

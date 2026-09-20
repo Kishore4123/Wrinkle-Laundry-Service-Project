@@ -61,8 +61,14 @@
                 <td>${when ? esc(when.toLocaleDateString('en-IN')) : '-'}<span class="cell-sub">${when ? esc(when.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })) : ''}</span></td>
                 <td><span class="badge ${status === 'Pending' ? 'pending' : 'completed'}">${esc(status)}</span></td>`;
 
+            // Clicking anywhere on the row opens the full breakdown; the action
+            // buttons stop propagation so they still do their own thing.
+            tr.className = 'clickable';
+            tr.onclick = () => showDetail(bill);
+
             const actions = document.createElement('td');
             actions.className = 'col-actions';
+            actions.onclick = (e) => e.stopPropagation();
 
             if (status === 'Pending') {
                 const complete = document.createElement('button');
@@ -142,6 +148,71 @@
         if (!res.success) toast(res.error, 'error');
     }
 
+    // ── Bill detail ────────────────────────────────────────────────────────
+
+    let detailBill = null;
+
+    /** Full breakdown: every service line and every garment counted within it. */
+    function showDetail(bill) {
+        detailBill = bill;
+        const cart = Array.isArray(bill.cartItems) ? bill.cartItems : [];
+        const status = bill.status || 'Pending';
+        const when = bill.createdAt ? new Date(bill.createdAt)
+            : bill.timestamp ? new Date(bill.timestamp) : null;
+
+        const services = cart.length ? cart.map((ci, i) => {
+            const label = SERVICE_TYPES[ci.serviceType]?.label || ci.serviceType || 'Service';
+            const basis = ci.isPiecewise
+                ? 'Charged per piece'
+                : `${ci.weight} kg @ ${formatCurrency(ci.ratePerKg)}/kg`;
+
+            const items = Array.isArray(ci.items) ? ci.items : [];
+            const rows = items.length
+                ? items.map((it) => `
+                    <tr>
+                      <td>${esc(it.label || it.category || 'Item')}</td>
+                      <td class="num">${esc(it.count)}</td>
+                      <td class="num">${ci.isPiecewise && it.rate ? esc(formatCurrency(it.rate)) : '—'}</td>
+                      <td class="num">${ci.isPiecewise && it.rate ? esc(formatCurrency(it.count * it.rate)) : '—'}</td>
+                    </tr>`).join('')
+                : `<tr><td colspan="4" class="muted-cell">No garment breakdown was recorded for this service.</td></tr>`;
+
+            return `
+              <div class="detail-service">
+                <div class="detail-service-head">
+                  <div>
+                    <strong>Service ${i + 1}: ${esc(label)}</strong>
+                    <span class="cell-sub">${esc(basis)}</span>
+                  </div>
+                  <strong>${esc(formatCurrency(ci.subtotal || 0))}</strong>
+                </div>
+                <table class="data detail-items">
+                  <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Total</th></tr></thead>
+                  <tbody>${rows}</tbody>
+                </table>
+              </div>`;
+        }).join('') : '<p class="help">This bill has no service lines recorded.</p>';
+
+        $('detail-title').textContent = `Bill ${bill.billId || ''}`;
+        $('detail-body').innerHTML = `
+            <div class="detail-grid">
+              <div><span>Customer</span><strong>${esc(bill.customerName || 'Unknown')}</strong></div>
+              <div><span>Phone</span><strong>${esc(bill.phone || '—')}</strong></div>
+              <div><span>Category</span><strong>${esc(bill.customerCategory || 'Student')}</strong></div>
+              <div><span>Status</span><strong><span class="badge ${status === 'Pending' ? 'pending' : 'completed'}">${esc(status)}</span></strong></div>
+              <div><span>Created</span><strong>${when ? esc(when.toLocaleString('en-IN')) : '—'}</strong></div>
+              <div><span>Due</span><strong>${esc(bill.dueDate || '—')}</strong></div>
+            </div>
+            ${services}
+            <div class="totals">
+              <div><span>Total weight</span><strong>${esc(bill.totalWeight || 0)} kg</strong></div>
+              <div><span>Total garments</span><strong>${esc(bill.totalClothesCount || 0)}</strong></div>
+              <div class="grand"><span>Total</span><strong>${esc(formatCurrency(bill.totalAmount || 0))}</strong></div>
+            </div>`;
+
+        $('detail-modal').classList.remove('hidden');
+    }
+
     // ── Navigation ─────────────────────────────────────────────────────────
 
     function switchTab(tab) {
@@ -196,6 +267,9 @@
         });
 
         $('bill-search').oninput = (e) => { billSearch = e.target.value; renderBills(); };
+
+        $('btn-close-detail').onclick = () => $('detail-modal').classList.add('hidden');
+        $('btn-detail-whatsapp').onclick = () => { if (detailBill) sendBill(detailBill); };
 
         window.Customers.bind();
         window.Expenses.bind();

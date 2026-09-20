@@ -74,28 +74,139 @@ function init(firestore, onChange) {
     (err) => console.error('[Shared] expenses listener error:', err.message)
   );
 
-  // Bills raised on ANOTHER desktop. Desktop-created bills are not uploaded to
-  // bills_inbox (that mailbox is consumed and deleted by whichever desktop sees
-  // it first, which would race between two desktops). They are published here
-  // instead, as durable records every desktop mirrors into its own archive.
+  // The shared bill archive. Every bill ends up here — whether a phone sent it
+  // through bills_inbox or a Command Center raised it directly — so a second
+  // desktop sees the same history. The inbox stays a consume-and-delete mailbox;
+  // whichever desktop drains it republishes the bill here as a durable record.
   onSnapshot(
-    collection(fs, 'desk_bills'),
+    collection(fs, 'bills'),
     (snap) => {
+      let touched = 0;
       snap.docChanges().forEach((change) => {
-        if (change.type === 'removed') return;
-        const bill = change.doc.data();
-        // Skip our own writes — already in this SQLite file.
-        if (bill.recordedByDesk === deskId) return;
         try {
-          db.addBill(bill);
+          if (change.type === 'removed') {
+            db.deleteBill(change.doc.id);
+          } else {
+            // fromCloud marks it already published, so mirroring cannot echo back.
+            db.addBill(change.doc.data(), { fromCloud: true });
+          }
+          touched++;
         } catch (e) {
-          console.error('[Shared] desk bill mirror failed:', e.message);
+          console.error('[Shared] bill mirror failed:', change.doc.id, e.message);
         }
       });
-      if (snap.docChanges().length && notify) notify('bills');
+      if (touched && notify) notify('bills');
     },
-    (err) => console.error('[Shared] desk_bills listener error:', err.message)
+    (err) => console.error('[Shared] bills listener error:', err.message)
   );
+
+  // The shared revenue ledger. Kept separate from bills because deleting a bill
+  // must never erase money that was collected — the ledger has no delete path.
+  onSnapshot(
+    collection(fs, 'ledger'),
+    (snap) => {
+      let touched = 0;
+      snap.docChanges().forEach((change) => {
+        if (change.type === 'removed') return;
+        try {
+          db.mirrorLedgerEntry(change.doc.data());
+          touched++;
+        } catch (e) {
+          console.error('[Shared] ledger mirror failed:', change.doc.id, e.message);
+        }
+      });
+      if (touched && notify) notify('bills');
+    },
+    (err) => console.error('[Shared] ledger listener error:', err.message)
+  );
+}
+
+// ── Publishing to the shared archive ───────────────────────────────────────
+
+async function publishBill(bill) {
+  if (!fs) return false;
+  const billId = bill.billId || bill.id;
+  if (!billId) return false;
+  await setDoc(doc(fs, 'bills', billId), {
+    ...bill,
+    billId,
+    cartItems: typeof bill.cartItems === 'string' ? bill.cartItems : JSON.stringify(bill.cartItems || []),
+    publishedByDesk: deskId,
+    publishedAt: Date.now(),
+  });
+  db.markBillPublished(billId);
+  return true;
+}
+
+async function publishLedgerEntry(entry) {
+  if (!fs) return false;
+  await setDoc(doc(fs, 'ledger', entry.billId), {
+    billId: entry.billId,
+    amount: entry.amount || 0,
+    weight: entry.weight || 0,
+    customerCategory: entry.customerCategory || 'Student',
+    customerId: entry.customerId || null,
+    customerName: entry.customerName || null,
+    services: entry.services || '[]',
+    collectedAt: entry.collectedAt || Date.now(),
+    publishedByDesk: deskId,
+  });
+  db.markLedgerPublished(entry.billId);
+  return true;
+}
+
+async function removeBillEverywhere(billId) {
+  db.deleteBill(billId);
+  if (!fs) return;
+  try {
+    await deleteDoc(doc(fs, 'bills', billId));
+  } catch (e) {
+    console.warn('[Shared] bill delete failed:', e.message);
+  }
+  // The ledger entry is deliberately left alone.
+}
+
+/**
+ * Carry anything this machine holds but has never published up to the cloud.
+ *
+ * On a machine that has been running since before the shared archive existed,
+ * this is what uploads its whole history — phone bills consumed from the
+ * mailbox and every revenue entry — so a newly installed Command Center can
+ * see it.
+ */
+async function publishPending() {
+  if (!fs) return { bills: 0, ledger: 0 };
+  let bills = 0, ledger = 0;
+
+  for (let pass = 0; pass < 50; pass++) {
+    const batch = db.getUnpublishedBills(100);
+    if (!batch.length) break;
+    for (const bill of batch) {
+      try { if (await publishBill(bill)) bills++; }
+      catch (e) {
+        console.warn('[Shared] backfill bill failed:', bill.billId, e.message);
+        // Stop rather than spin on a failing row.
+        return { bills, ledger };
+      }
+    }
+  }
+
+  for (let pass = 0; pass < 50; pass++) {
+    const batch = db.getUnpublishedLedger(100);
+    if (!batch.length) break;
+    for (const entry of batch) {
+      try { if (await publishLedgerEntry(entry)) ledger++; }
+      catch (e) {
+        console.warn('[Shared] backfill ledger failed:', entry.billId, e.message);
+        return { bills, ledger };
+      }
+    }
+  }
+
+  if (bills || ledger) {
+    console.log(`[Shared] backfilled ${bills} bill(s) and ${ledger} ledger entr(ies) to the shared archive`);
+  }
+  return { bills, ledger };
 }
 
 // Identifies this particular desktop, so shared records it wrote can be told
@@ -182,24 +293,6 @@ async function removeExpense(id) {
   db.deleteExpense(id);
   if (fs) {
     try { await deleteDoc(doc(fs, 'expenses', id)); } catch (e) {}
-  }
-}
-
-/**
- * Publish a bill this desktop just created so other desktops mirror it.
- * Phones do not read this collection — they use bills_inbox in the other
- * direction and pull bills on demand via search.
- */
-async function publishDeskBill(bill) {
-  if (!fs) return;
-  try {
-    await setDoc(doc(fs, 'desk_bills', bill.billId || bill.id), {
-      ...bill,
-      recordedByDesk: deskId,
-      publishedAt: Date.now(),
-    });
-  } catch (e) {
-    console.warn('[Shared] desk bill publish failed:', e.message);
   }
 }
 
@@ -299,7 +392,10 @@ module.exports = {
   seedPricingIfAbsent,
   saveExpense,
   removeExpense,
-  publishDeskBill,
+  publishBill,
+  publishLedgerEntry,
+  removeBillEverywhere,
+  publishPending,
   getPricing,
   savePricing,
   saveCustomer,

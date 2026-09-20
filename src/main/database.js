@@ -41,6 +41,81 @@ function open(directory) {
   initDB();
 }
 
+// Columns the current code actually writes. Anything else on an old database
+// is legacy baggage.
+const CANONICAL_BILL_COLUMNS = [
+  'id', 'billId', 'customerName', 'customerCategory', 'phone', 'cartItems',
+  'totalWeight', 'totalClothesCount', 'totalAmount', 'dueDate', 'status',
+  'completedAt', 'createdAt', 'timestamp', 'createdByDevice', 'customerId',
+  'publishedAt',
+];
+
+/**
+ * Rebuild `bills` when an old database carries a NOT NULL column the current
+ * code never writes.
+ *
+ * The first version of this app had `items TEXT NOT NULL`. A machine still
+ * holding that schema fails every insert with "NOT NULL constraint failed:
+ * bills.items", because nothing populates it any more. `ALTER TABLE` cannot
+ * drop a constraint in SQLite, so the table is recreated and the data copied.
+ */
+function migrateLegacyBills() {
+  const existing = db.prepare('PRAGMA table_info(bills)').all();
+  if (!existing.length) return;
+
+  const blocking = existing.filter(
+    (c) => c.notnull === 1 && c.dflt_value === null && !CANONICAL_BILL_COLUMNS.includes(c.name)
+  );
+  if (!blocking.length) return;
+
+  console.log('[DB] migrating legacy bills table, dropping:', blocking.map((c) => c.name).join(', '));
+
+  // Copy only the columns both schemas share.
+  const carried = existing
+    .map((c) => c.name)
+    .filter((name) => CANONICAL_BILL_COLUMNS.includes(name));
+  const columnList = carried.join(', ');
+
+  db.exec('PRAGMA foreign_keys=OFF');
+  const rebuild = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE bills_migrated (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        billId TEXT UNIQUE,
+        customerName TEXT NOT NULL,
+        customerCategory TEXT DEFAULT 'Student',
+        phone TEXT NOT NULL DEFAULT '',
+        cartItems TEXT DEFAULT '[]',
+        totalWeight REAL DEFAULT 0,
+        totalClothesCount INTEGER DEFAULT 0,
+        totalAmount REAL NOT NULL DEFAULT 0,
+        dueDate TEXT,
+        status TEXT NOT NULL DEFAULT 'Pending',
+        completedAt TEXT,
+        createdAt INTEGER,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        createdByDevice TEXT,
+        customerId TEXT,
+        publishedAt INTEGER
+      )
+    `);
+    db.exec(`INSERT INTO bills_migrated (${columnList}) SELECT ${columnList} FROM bills`);
+    db.exec('DROP TABLE bills');
+    db.exec('ALTER TABLE bills_migrated RENAME TO bills');
+  });
+
+  try {
+    rebuild();
+    console.log('[DB] legacy bills table migrated successfully');
+  } catch (e) {
+    console.error('[DB] legacy migration failed:', e.message);
+    try { db.exec('DROP TABLE IF EXISTS bills_migrated'); } catch (_) {}
+    throw e;
+  } finally {
+    db.exec('PRAGMA foreign_keys=ON');
+  }
+}
+
 function initDB() {
   // Main bills table — columns aligned to what the mobile app sends
   db.exec(`
@@ -73,6 +148,9 @@ function initDB() {
     { name: 'createdAt', type: 'INTEGER' },
     { name: 'createdByDevice', type: 'TEXT' },
     { name: 'customerId', type: 'TEXT' },
+    // Null until this row has been published to the shared archive. Drives the
+    // backfill that carries an existing machine's history up to the cloud.
+    { name: 'publishedAt', type: 'INTEGER' },
   ];
 
   for (const col of columnsToAdd) {
@@ -82,6 +160,10 @@ function initDB() {
       // Column already exists — ignore
     }
   }
+
+  // Run after the ADD COLUMN pass so the canonical columns exist before the
+  // table is rebuilt and the data copied across.
+  migrateLegacyBills();
 
   // Local mirror of the shared customer directory. Firestore is authoritative;
   // this copy keeps the desktop usable when the connection drops.
@@ -126,6 +208,7 @@ function initDB() {
     )
   `);
   db.exec('CREATE INDEX IF NOT EXISTS idx_ledger_collected ON revenue_ledger (collectedAt)');
+  try { db.exec('ALTER TABLE revenue_ledger ADD COLUMN publishedAt INTEGER'); } catch (e) {}
 
   // Money going out. Mirrored to Firestore so every desktop in the shop sees
   // the same books.
@@ -190,7 +273,8 @@ function recordRevenue(bill) {
       customerId = excluded.customerId,
       customerName = excluded.customerName,
       services = excluded.services,
-      collectedAt = excluded.collectedAt
+      collectedAt = excluded.collectedAt,
+      publishedAt = NULL
   `).run({
     billId: bill.billId || bill.id,
     amount: bill.totalAmount || 0,
@@ -264,6 +348,24 @@ module.exports = {
     return { directory: targetDir, dbPath: targetDb, moved: true, adopted: adopting };
   },
 
+  // ── Backup ──────────────────────────────────────────────────────────────
+
+  /**
+   * Write a consistent snapshot of the live database to `destDir`.
+   *
+   * This exists because a live SQLite file inside OneDrive does not sync: the
+   * app holds the handle open, so OneDrive skips it until the app closes. A
+   * snapshot is a plain, closed file that OneDrive picks up immediately, and
+   * SQLite's online backup API guarantees it is consistent even mid-write.
+   */
+  backupTo: async (destDir) => {
+    fsx.mkdirSync(destDir, { recursive: true });
+    const dest = path.join(destDir, 'wrinkle-laundry-backup.db');
+    await db.backup(dest);
+    const { size } = fsx.statSync(dest);
+    return { path: dest, size, at: Date.now() };
+  },
+
   // ── Bills ───────────────────────────────────────────────────────────────
 
   getBills: () => {
@@ -281,12 +383,22 @@ module.exports = {
    *   Mobile sends: { id, customerName, mobile, cartItems, totalAmount, status, ... }
    *   DB expects:   { billId, customerName, phone, cartItems, totalAmount, status, ... }
    */
-  addBill: (bill) => {
+  /**
+   * @param {object} bill
+   * @param {object} [opts] `fromCloud: true` marks the row already published,
+   *   so mirroring another Command Center's bill does not echo it back.
+   */
+  addBill: (bill, opts = {}) => {
+    const publishedAt = opts.fromCloud ? Date.now() : null;
     const billId = bill.billId || bill.id || ('SYNC-' + Date.now());
     const customerName = bill.customerName || bill.studentName || 'Unknown';
     const phone = bill.phone || bill.mobile || '';
     const customerCategory = bill.customerCategory || 'Student';
-    const cartItemsArr = bill.cartItems || bill.items || [];
+    // cartItems arrives as an array from the phone and this app, but as a JSON
+    // string when mirrored back from the shared archive. Normalise before use —
+    // recordRevenue maps over it.
+    const rawCart = bill.cartItems ?? bill.items ?? [];
+    const cartItemsArr = Array.isArray(rawCart) ? rawCart : safeJsonParse(rawCart, []);
     const cartItems = JSON.stringify(cartItemsArr);
     const totalWeight = bill.totalWeight || bill.weight || 0;
     const totalClothesCount = bill.totalClothesCount || bill.clothesCount || 0;
@@ -308,11 +420,12 @@ module.exports = {
     db.prepare(`
       INSERT INTO bills (billId, customerName, customerCategory, phone, cartItems,
         totalWeight, totalClothesCount, totalAmount, dueDate, status, completedAt,
-        createdAt, timestamp, createdByDevice, customerId)
+        createdAt, timestamp, createdByDevice, customerId, publishedAt)
       VALUES (@billId, @customerName, @customerCategory, @phone, @cartItems,
         @totalWeight, @totalClothesCount, @totalAmount, @dueDate, @status, @completedAt,
-        @createdAt, @timestamp, @createdByDevice, @customerId)
+        @createdAt, @timestamp, @createdByDevice, @customerId, @publishedAt)
       ON CONFLICT(billId) DO UPDATE SET
+        publishedAt = excluded.publishedAt,
         customerName = excluded.customerName,
         customerCategory = excluded.customerCategory,
         phone = excluded.phone,
@@ -331,6 +444,7 @@ module.exports = {
       billId, customerName, customerCategory, phone, cartItems,
       totalWeight, totalClothesCount, totalAmount,
       dueDate, status, completedAt, createdAt, timestamp, createdByDevice, customerId,
+      publishedAt,
     });
 
     // A bill can arrive from a phone already marked paid, so the ledger is
@@ -347,7 +461,9 @@ module.exports = {
 
   updateBillStatus: (billId, status) => {
     const completedAt = status === 'Completed' ? new Date().toISOString() : null;
-    db.prepare('UPDATE bills SET status = ?, completedAt = ? WHERE billId = ?')
+    // publishedAt is cleared so the change is picked up by the next publish pass
+    // and reaches the other Command Centers.
+    db.prepare('UPDATE bills SET status = ?, completedAt = ?, publishedAt = NULL WHERE billId = ?')
       .run(status, completedAt, billId);
 
     if (status === 'Completed') {
@@ -370,6 +486,61 @@ module.exports = {
   /** Removes the order. The revenue ledger is deliberately left untouched. */
   deleteBill: (billId) => {
     db.prepare('DELETE FROM bills WHERE billId = ?').run(billId);
+  },
+
+  // ── Shared archive plumbing ─────────────────────────────────────────────
+  //
+  // Bills and ledger entries live in Firestore as durable shared records, so a
+  // second Command Center sees the same archive. `publishedAt` marks a row as
+  // already sent; rows that predate this (or were only ever consumed from the
+  // phone mailbox) come up as unpublished and get backfilled on startup.
+
+  getUnpublishedBills: (limit = 200) => {
+    const rows = db.prepare('SELECT * FROM bills WHERE publishedAt IS NULL LIMIT ?').all(limit);
+    return rows.map((r) => ({ ...r, cartItems: safeJsonParse(r.cartItems, []) }));
+  },
+
+  getUnpublishedLedger: (limit = 200) =>
+    db.prepare('SELECT * FROM revenue_ledger WHERE publishedAt IS NULL LIMIT ?').all(limit),
+
+  markBillPublished: (billId) => {
+    db.prepare('UPDATE bills SET publishedAt = ? WHERE billId = ?').run(Date.now(), billId);
+  },
+
+  markLedgerPublished: (billId) => {
+    db.prepare('UPDATE revenue_ledger SET publishedAt = ? WHERE billId = ?').run(Date.now(), billId);
+  },
+
+  countUnpublished: () => ({
+    bills: db.prepare('SELECT COUNT(*) n FROM bills WHERE publishedAt IS NULL').get().n,
+    ledger: db.prepare('SELECT COUNT(*) n FROM revenue_ledger WHERE publishedAt IS NULL').get().n,
+  }),
+
+  /** Apply a ledger entry arriving from another Command Center. */
+  mirrorLedgerEntry: (entry) => {
+    db.prepare(`
+      INSERT INTO revenue_ledger (billId, amount, weight, customerCategory, customerId, customerName, services, collectedAt, publishedAt)
+      VALUES (@billId, @amount, @weight, @customerCategory, @customerId, @customerName, @services, @collectedAt, @publishedAt)
+      ON CONFLICT(billId) DO UPDATE SET
+        amount = excluded.amount,
+        weight = excluded.weight,
+        customerCategory = excluded.customerCategory,
+        customerId = excluded.customerId,
+        customerName = excluded.customerName,
+        services = excluded.services,
+        collectedAt = excluded.collectedAt,
+        publishedAt = excluded.publishedAt
+    `).run({
+      billId: entry.billId,
+      amount: entry.amount || 0,
+      weight: entry.weight || 0,
+      customerCategory: entry.customerCategory || 'Student',
+      customerId: entry.customerId || null,
+      customerName: entry.customerName || null,
+      services: typeof entry.services === 'string' ? entry.services : JSON.stringify(entry.services || []),
+      collectedAt: entry.collectedAt || Date.now(),
+      publishedAt: Date.now(),
+    });
   },
 
   // ── Customers (mirror of the shared directory) ──────────────────────────

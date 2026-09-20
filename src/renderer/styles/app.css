@@ -526,3 +526,40 @@ table.data tbody tr:hover { background: var(--surface-alt); }
   .pos { grid-template-columns: 1fr; }
   .pos-side { position: static; max-height: none; }
 }
+
+/* ── Bill detail ─────────────────────────────────────────────────────── */
+
+.modal.wide-md { max-width: 720px; }
+table.data tr.clickable { cursor: pointer; }
+
+.detail-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem 1.25rem; margin-bottom: 1.1rem;
+  padding-bottom: 1rem; border-bottom: 1px solid var(--border);
+}
+.detail-grid > div { display: flex; flex-direction: column; gap: 0.15rem; }
+.detail-grid span { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.detail-grid strong { font-size: 0.88rem; }
+
+.detail-service {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  margin-bottom: 0.85rem; overflow: hidden;
+}
+.detail-service-head {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;
+  padding: 0.7rem 0.85rem; background: var(--surface-alt);
+}
+.detail-service-head strong { font-size: 0.88rem; }
+table.detail-items { width: 100%; }
+table.detail-items th, table.detail-items td { padding: 0.45rem 0.85rem; font-size: 0.82rem; }
+table.detail-items tbody tr:hover { background: transparent; }
+table.detail-items .num { text-align: right; }
+.muted-cell { color: var(--text-muted); font-size: 0.8rem; }
+
+.warn-box {
+  margin-top: 0.85rem; padding: 0.85rem 0.95rem;
+  background: var(--warning-soft); border: 1px solid #f0d9ae;
+  border-radius: var(--radius-sm);
+}
+.warn-box strong { font-size: 0.85rem; display: block; margin-bottom: 0.3rem; }
+.warn-box .help { margin-bottom: 0.7rem; }

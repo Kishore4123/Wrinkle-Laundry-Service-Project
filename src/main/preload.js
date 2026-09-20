@@ -38,6 +38,9 @@ contextBridge.exposeInMainWorld('api', {
   getStorageInfo: () => ipcRenderer.invoke('storage:get'),
   chooseStorage: () => ipcRenderer.invoke('storage:choose'),
   useOneDrive: () => ipcRenderer.invoke('storage:useOneDrive'),
+  backupNow: () => ipcRenderer.invoke('storage:backupNow'),
+  backupInfo: () => ipcRenderer.invoke('storage:backupInfo'),
+  useLocalPlusBackup: () => ipcRenderer.invoke('storage:useLocalPlusBackup'),
 
   // WhatsApp
   sendWhatsApp: (mobile, message) => ipcRenderer.invoke('app:sendWhatsApp', { mobile, message }),
