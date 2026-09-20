@@ -6,6 +6,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { BillService } from '../services/storage';
 import BillCard from '../components/BillCard';
+import BillDetailModal from '../components/BillDetailModal';
 import EmptyState from '../components/EmptyState';
 import { appColors, SERVICE_TYPES } from '../theme/theme';
 import { formatDate, formatCurrency, buildWhatsAppUrl, buildOrderReadyMessage } from '../utils/helpers';
@@ -50,6 +51,7 @@ export default function HistoryScreen({ route, navigation }) {
   const [selectedBill, setSelectedBill] = useState(null);
   const [paymentModalVisible, setPaymentModalVisible] = useState(false);
   const [doneModalVisible, setDoneModalVisible] = useState(false);
+  const [detailBill, setDetailBill] = useState(null);
   const [deliveryDate, setDeliveryDate] = useState(null);
   const [showDeliveryDatePicker, setShowDeliveryDatePicker] = useState(false);
 
@@ -250,10 +252,7 @@ export default function HistoryScreen({ route, navigation }) {
           <BillCard
             bill={item}
             variant="current"
-            onPress={() => {
-              setSelectedBill(item);
-              setPaymentModalVisible(true);
-            }}
+            onPress={() => setDetailBill(item)}
           />
         </TouchableOpacity>
       );
@@ -263,10 +262,7 @@ export default function HistoryScreen({ route, navigation }) {
         <BillCard
           bill={item}
           variant="completed"
-          onPress={() => {
-            setSelectedBill(item);
-            setPaymentModalVisible(true);
-          }}
+          onPress={() => setDetailBill(item)}
           onSyncPress={handleSingleSync}
         />
       </TouchableOpacity>
@@ -575,6 +571,24 @@ export default function HistoryScreen({ route, navigation }) {
           </View>
         </Modal>
       </Portal>
+
+      {/* Full breakdown — every service line and the garments counted in it.
+          From here a pending bill can go on to the payment flow, and a
+          completed one can have its receipt resent. */}
+      <BillDetailModal
+        visible={!!detailBill}
+        bill={detailBill}
+        onDismiss={() => setDetailBill(null)}
+        actionLabel={detailBill?.status === 'Completed' ? 'Resend Receipt' : 'Payment & Delivery'}
+        onAction={() => {
+          const bill = detailBill;
+          setDetailBill(null);
+          if (!bill) return;
+          setSelectedBill(bill);
+          if (bill.status === 'Completed') handleSingleSync(bill);
+          else setPaymentModalVisible(true);
+        }}
+      />
     </View>
   );
 }
