@@ -1,0 +1,31 @@
+{
+  "name": "wrinkle-laundry-command-center",
+  "version": "1.0.0",
+  "description": "Wrinkle Release Laundry Service Command Center",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "author": "Wrinkle Laundry",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^11.2.1",
+    "firebase": "^11.10.0"
+  },
+  "devDependencies": {
+    "electron": "^32.0.1",
+    "electron-builder": "^25.0.5"
+  },
+  "build": {
+    "appId": "com.wrinkle.laundry",
+    "productName": "Wrinkle Laundry Command Center",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

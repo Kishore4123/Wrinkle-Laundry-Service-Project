@@ -1,0 +1,792 @@
+const Database = require('better-sqlite3');
+const path = require('path');
+const fsx = require('fs');
+const { app } = require('electron');
+
+const DB_NAME = 'wrinkle-laundry.db';
+const FOLDER_NAME = 'WrinkleLaundry';
+
+// Where the data folder lives is user-configurable, so the pointer to it must
+// NOT live in the data folder. It always stays in userData.
+function locationConfigPath() {
+  return path.join(app.getPath('userData'), 'storage-location.json');
+}
+
+function readStorageDir() {
+  try {
+    const { directory } = JSON.parse(fsx.readFileSync(locationConfigPath(), 'utf8'));
+    if (directory && fsx.existsSync(directory)) return directory;
+  } catch (e) {
+    // No config yet, or it points somewhere that no longer exists (an unplugged
+    // drive, a deleted folder). Fall back rather than refusing to start.
+  }
+  return app.getPath('userData');
+}
+
+function writeStorageDir(directory) {
+  fsx.writeFileSync(locationConfigPath(), JSON.stringify({ directory }, null, 2));
+}
+
+let db = null;
+let currentDir = null;
+
+function open(directory) {
+  if (db) {
+    try { db.close(); } catch (e) {}
+    db = null;
+  }
+  fsx.mkdirSync(directory, { recursive: true });
+  db = new Database(path.join(directory, DB_NAME));
+  currentDir = directory;
+  initDB();
+}
+
+// Columns the current code actually writes. Anything else on an old database
+// is legacy baggage.
+const CANONICAL_BILL_COLUMNS = [
+  'id', 'billId', 'customerName', 'customerCategory', 'phone', 'cartItems',
+  'totalWeight', 'totalClothesCount', 'totalAmount', 'dueDate', 'status',
+  'completedAt', 'createdAt', 'timestamp', 'createdByDevice', 'customerId',
+  'publishedAt',
+];
+
+/**
+ * Rebuild `bills` when an old database carries a NOT NULL column the current
+ * code never writes.
+ *
+ * The first version of this app had `items TEXT NOT NULL`. A machine still
+ * holding that schema fails every insert with "NOT NULL constraint failed:
+ * bills.items", because nothing populates it any more. `ALTER TABLE` cannot
+ * drop a constraint in SQLite, so the table is recreated and the data copied.
+ */
+function migrateLegacyBills() {
+  const existing = db.prepare('PRAGMA table_info(bills)').all();
+  if (!existing.length) return;
+
+  const blocking = existing.filter(
+    (c) => c.notnull === 1 && c.dflt_value === null && !CANONICAL_BILL_COLUMNS.includes(c.name)
+  );
+  if (!blocking.length) return;
+
+  console.log('[DB] migrating legacy bills table, dropping:', blocking.map((c) => c.name).join(', '));
+
+  // Copy only the columns both schemas share.
+  const carried = existing
+    .map((c) => c.name)
+    .filter((name) => CANONICAL_BILL_COLUMNS.includes(name));
+  const columnList = carried.join(', ');
+
+  db.exec('PRAGMA foreign_keys=OFF');
+  const rebuild = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE bills_migrated (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        billId TEXT UNIQUE,
+        customerName TEXT NOT NULL,
+        customerCategory TEXT DEFAULT 'Student',
+        phone TEXT NOT NULL DEFAULT '',
+        cartItems TEXT DEFAULT '[]',
+        totalWeight REAL DEFAULT 0,
+        totalClothesCount INTEGER DEFAULT 0,
+        totalAmount REAL NOT NULL DEFAULT 0,
+        dueDate TEXT,
+        status TEXT NOT NULL DEFAULT 'Pending',
+        completedAt TEXT,
+        createdAt INTEGER,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        createdByDevice TEXT,
+        customerId TEXT,
+        publishedAt INTEGER
+      )
+    `);
+    db.exec(`INSERT INTO bills_migrated (${columnList}) SELECT ${columnList} FROM bills`);
+    db.exec('DROP TABLE bills');
+    db.exec('ALTER TABLE bills_migrated RENAME TO bills');
+  });
+
+  try {
+    rebuild();
+    console.log('[DB] legacy bills table migrated successfully');
+  } catch (e) {
+    console.error('[DB] legacy migration failed:', e.message);
+    try { db.exec('DROP TABLE IF EXISTS bills_migrated'); } catch (_) {}
+    throw e;
+  } finally {
+    db.exec('PRAGMA foreign_keys=ON');
+  }
+}
+
+function initDB() {
+  // Main bills table — columns aligned to what the mobile app sends
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      billId TEXT UNIQUE,
+      customerName TEXT NOT NULL,
+      customerCategory TEXT DEFAULT 'Student',
+      phone TEXT NOT NULL DEFAULT '',
+      cartItems TEXT DEFAULT '[]',
+      totalWeight REAL DEFAULT 0,
+      totalClothesCount INTEGER DEFAULT 0,
+      totalAmount REAL NOT NULL DEFAULT 0,
+      dueDate TEXT,
+      status TEXT NOT NULL DEFAULT 'Pending',
+      completedAt TEXT,
+      createdAt INTEGER,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Add columns that may not exist on older DBs (safe migration)
+  const columnsToAdd = [
+    { name: 'customerCategory', type: "TEXT DEFAULT 'Student'" },
+    { name: 'cartItems', type: "TEXT DEFAULT '[]'" },
+    { name: 'totalWeight', type: 'REAL DEFAULT 0' },
+    { name: 'totalClothesCount', type: 'INTEGER DEFAULT 0' },
+    { name: 'dueDate', type: 'TEXT' },
+    { name: 'completedAt', type: 'TEXT' },
+    { name: 'createdAt', type: 'INTEGER' },
+    { name: 'createdByDevice', type: 'TEXT' },
+    { name: 'customerId', type: 'TEXT' },
+    // Null until this row has been published to the shared archive. Drives the
+    // backfill that carries an existing machine's history up to the cloud.
+    { name: 'publishedAt', type: 'INTEGER' },
+  ];
+
+  for (const col of columnsToAdd) {
+    try {
+      db.exec(`ALTER TABLE bills ADD COLUMN ${col.name} ${col.type}`);
+    } catch (e) {
+      // Column already exists — ignore
+    }
+  }
+
+  // Run after the ADD COLUMN pass so the canonical columns exist before the
+  // table is rebuilt and the data copied across.
+  migrateLegacyBills();
+
+  // Local mirror of the shared customer directory. Firestore is authoritative;
+  // this copy keeps the desktop usable when the connection drops.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS customers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      mobile TEXT NOT NULL DEFAULT '',
+      category TEXT DEFAULT 'Student',
+      totalWeight REAL DEFAULT 0,
+      totalAmountPaid REAL DEFAULT 0,
+      createdAt INTEGER,
+      updatedAt INTEGER
+    )
+  `);
+
+  // Key/value store for shared config (pricing JSON), cached the same way.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updatedAt INTEGER
+    )
+  `);
+
+  // Immutable record of money actually collected.
+  //
+  // Deliberately separate from `bills`: deleting a bill is a bookkeeping action
+  // on the order, and must never rewrite history by erasing revenue that was
+  // genuinely taken. Every revenue figure in the app reads from here, never
+  // from the bills table.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS revenue_ledger (
+      billId TEXT PRIMARY KEY,
+      amount REAL NOT NULL DEFAULT 0,
+      weight REAL DEFAULT 0,
+      customerCategory TEXT,
+      customerId TEXT,
+      customerName TEXT,
+      services TEXT DEFAULT '[]',
+      collectedAt INTEGER NOT NULL
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_ledger_collected ON revenue_ledger (collectedAt)');
+  try { db.exec('ALTER TABLE revenue_ledger ADD COLUMN publishedAt INTEGER'); } catch (e) {}
+
+  // Money going out. Mirrored to Firestore so every desktop in the shop sees
+  // the same books.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'Other',
+      amount REAL NOT NULL DEFAULT 0,
+      note TEXT,
+      spentAt INTEGER NOT NULL,
+      createdAt INTEGER,
+      updatedAt INTEGER,
+      recordedBy TEXT
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_expenses_spent ON expenses (spentAt)');
+
+  backfillLedger();
+}
+
+const EXPENSE_CATEGORIES = [
+  'Rent', 'Salary', 'Electricity', 'Water', 'Detergent & Supplies',
+  'Machine Maintenance', 'Transport', 'Packaging', 'Other',
+];
+
+/**
+ * One-time catch-up for databases that predate the ledger: any bill already
+ * marked Completed gets an entry, so upgrading doesn't show zero revenue.
+ */
+function backfillLedger() {
+  const already = db.prepare('SELECT COUNT(*) AS n FROM revenue_ledger').get().n;
+  if (already > 0) return;
+  const completed = db.prepare("SELECT * FROM bills WHERE status = 'Completed'").all();
+  for (const bill of completed) {
+    recordRevenue({ ...bill, cartItems: safeJsonParse(bill.cartItems, []) });
+  }
+}
+
+function collectedTimestamp(bill) {
+  const fromCompleted = bill.completedAt ? Date.parse(bill.completedAt) : NaN;
+  if (Number.isFinite(fromCompleted)) return fromCompleted;
+  if (Number.isFinite(bill.createdAt)) return bill.createdAt;
+  const fromTimestamp = bill.timestamp ? Date.parse(bill.timestamp) : NaN;
+  return Number.isFinite(fromTimestamp) ? fromTimestamp : Date.now();
+}
+
+/** Idempotent on billId — completing an already-recorded bill updates, never duplicates. */
+function recordRevenue(bill) {
+  const services = (bill.cartItems || []).map((ci) => ({
+    serviceType: ci.serviceType || 'OTHER',
+    subtotal: ci.subtotal || 0,
+  }));
+
+  db.prepare(`
+    INSERT INTO revenue_ledger (billId, amount, weight, customerCategory, customerId, customerName, services, collectedAt)
+    VALUES (@billId, @amount, @weight, @customerCategory, @customerId, @customerName, @services, @collectedAt)
+    ON CONFLICT(billId) DO UPDATE SET
+      amount = excluded.amount,
+      weight = excluded.weight,
+      customerCategory = excluded.customerCategory,
+      customerId = excluded.customerId,
+      customerName = excluded.customerName,
+      services = excluded.services,
+      collectedAt = excluded.collectedAt,
+      publishedAt = NULL
+  `).run({
+    billId: bill.billId || bill.id,
+    amount: bill.totalAmount || 0,
+    weight: bill.totalWeight || 0,
+    customerCategory: bill.customerCategory || 'Student',
+    customerId: bill.customerId || null,
+    customerName: bill.customerName || null,
+    services: JSON.stringify(services),
+    collectedAt: collectedTimestamp(bill),
+  });
+}
+
+open(readStorageDir());
+
+function safeJsonParse(str, fallback) {
+  try { return JSON.parse(str); } catch (e) { return fallback; }
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+function dayKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
+function monthKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; }
+function yearKey(d) { return String(d.getFullYear()); }
+
+module.exports = {
+  // ── Storage location ────────────────────────────────────────────────────
+
+  getStorageInfo: () => ({
+    directory: currentDir,
+    dbPath: path.join(currentDir, DB_NAME),
+    isDefault: currentDir === app.getPath('userData'),
+  }),
+
+  /**
+   * Move the data folder to a directory the user picked. Creates a
+   * "WrinkleLaundry" folder inside it, copies the database across, then
+   * switches to it. The old file is renamed rather than deleted so a failed
+   * move is always recoverable.
+   */
+  relocateStorage: (targetParent) => {
+    const targetDir = path.join(targetParent, FOLDER_NAME);
+    const targetDb = path.join(targetDir, DB_NAME);
+    const sourceDb = path.join(currentDir, DB_NAME);
+
+    if (path.resolve(targetDir) === path.resolve(currentDir)) {
+      return { directory: currentDir, dbPath: sourceDb, moved: false };
+    }
+
+    fsx.mkdirSync(targetDir, { recursive: true });
+
+    // If the target already holds a database, adopt it rather than overwriting —
+    // re-selecting a folder used previously should resume that data, not destroy it.
+    const adopting = fsx.existsSync(targetDb);
+
+    if (db) { try { db.close(); } catch (e) {} db = null; }
+
+    if (!adopting) {
+      fsx.copyFileSync(sourceDb, targetDb);
+      // Copy sidecar files too if the journal mode ever produces them.
+      for (const suffix of ['-wal', '-shm']) {
+        if (fsx.existsSync(sourceDb + suffix)) fsx.copyFileSync(sourceDb + suffix, targetDb + suffix);
+      }
+    }
+
+    open(targetDir);
+    writeStorageDir(targetDir);
+
+    if (!adopting && fsx.existsSync(sourceDb)) {
+      try { fsx.renameSync(sourceDb, sourceDb + '.bak'); } catch (e) {}
+    }
+
+    return { directory: targetDir, dbPath: targetDb, moved: true, adopted: adopting };
+  },
+
+  // ── Backup ──────────────────────────────────────────────────────────────
+
+  /**
+   * Write a consistent snapshot of the live database to `destDir`.
+   *
+   * This exists because a live SQLite file inside OneDrive does not sync: the
+   * app holds the handle open, so OneDrive skips it until the app closes. A
+   * snapshot is a plain, closed file that OneDrive picks up immediately, and
+   * SQLite's online backup API guarantees it is consistent even mid-write.
+   */
+  backupTo: async (destDir) => {
+    fsx.mkdirSync(destDir, { recursive: true });
+    const dest = path.join(destDir, 'wrinkle-laundry-backup.db');
+    await db.backup(dest);
+    const { size } = fsx.statSync(dest);
+    return { path: dest, size, at: Date.now() };
+  },
+
+  // ── Bills ───────────────────────────────────────────────────────────────
+
+  getBills: () => {
+    const rows = db.prepare('SELECT * FROM bills ORDER BY timestamp DESC').all();
+    return rows.map((row) => ({
+      ...row,
+      cartItems: safeJsonParse(row.cartItems, []),
+      items: row.items ? safeJsonParse(row.items, []) : undefined,
+    }));
+  },
+
+  /**
+   * Add or update a bill from mobile sync.
+   * Handles the mobile app's field naming convention:
+   *   Mobile sends: { id, customerName, mobile, cartItems, totalAmount, status, ... }
+   *   DB expects:   { billId, customerName, phone, cartItems, totalAmount, status, ... }
+   */
+  /**
+   * @param {object} bill
+   * @param {object} [opts] `fromCloud: true` marks the row already published,
+   *   so mirroring another Command Center's bill does not echo it back.
+   */
+  addBill: (bill, opts = {}) => {
+    const publishedAt = opts.fromCloud ? Date.now() : null;
+    const billId = bill.billId || bill.id || ('SYNC-' + Date.now());
+    const customerName = bill.customerName || bill.studentName || 'Unknown';
+    const phone = bill.phone || bill.mobile || '';
+    const customerCategory = bill.customerCategory || 'Student';
+    // cartItems arrives as an array from the phone and this app, but as a JSON
+    // string when mirrored back from the shared archive. Normalise before use —
+    // recordRevenue maps over it.
+    const rawCart = bill.cartItems ?? bill.items ?? [];
+    const cartItemsArr = Array.isArray(rawCart) ? rawCart : safeJsonParse(rawCart, []);
+    const cartItems = JSON.stringify(cartItemsArr);
+    const totalWeight = bill.totalWeight || bill.weight || 0;
+    const totalClothesCount = bill.totalClothesCount || bill.clothesCount || 0;
+    const totalAmount = bill.totalAmount || 0;
+    const dueDate = bill.dueDate || null;
+    const status = bill.status || 'Pending';
+    const completedAt = bill.completedAt || null;
+    const createdAt = bill.createdAt || Date.now();
+    const timestamp = bill.timestamp || new Date().toISOString();
+    // Which device originated this bill — status changes are routed back to it.
+    const createdByDevice = bill.createdByDevice || null;
+    // Links the bill to the shared customer directory so marking it paid can
+    // roll the amount into that customer's lifetime stats.
+    const customerId = bill.customerId || bill.studentId || null;
+
+    // A single atomic upsert rather than check-then-insert: Firestore can
+    // deliver the same document to two overlapping snapshot callbacks, and the
+    // old read-then-write pattern lost that race with a UNIQUE constraint error.
+    db.prepare(`
+      INSERT INTO bills (billId, customerName, customerCategory, phone, cartItems,
+        totalWeight, totalClothesCount, totalAmount, dueDate, status, completedAt,
+        createdAt, timestamp, createdByDevice, customerId, publishedAt)
+      VALUES (@billId, @customerName, @customerCategory, @phone, @cartItems,
+        @totalWeight, @totalClothesCount, @totalAmount, @dueDate, @status, @completedAt,
+        @createdAt, @timestamp, @createdByDevice, @customerId, @publishedAt)
+      ON CONFLICT(billId) DO UPDATE SET
+        publishedAt = excluded.publishedAt,
+        customerName = excluded.customerName,
+        customerCategory = excluded.customerCategory,
+        phone = excluded.phone,
+        cartItems = excluded.cartItems,
+        totalWeight = excluded.totalWeight,
+        totalClothesCount = excluded.totalClothesCount,
+        totalAmount = excluded.totalAmount,
+        dueDate = excluded.dueDate,
+        status = excluded.status,
+        completedAt = excluded.completedAt,
+        createdAt = excluded.createdAt,
+        timestamp = excluded.timestamp,
+        createdByDevice = COALESCE(excluded.createdByDevice, bills.createdByDevice),
+        customerId = COALESCE(excluded.customerId, bills.customerId)
+    `).run({
+      billId, customerName, customerCategory, phone, cartItems,
+      totalWeight, totalClothesCount, totalAmount,
+      dueDate, status, completedAt, createdAt, timestamp, createdByDevice, customerId,
+      publishedAt,
+    });
+
+    // A bill can arrive from a phone already marked paid, so the ledger is
+    // written here too — not only when this desktop completes a bill itself.
+    if (status === 'Completed') {
+      recordRevenue({
+        billId, totalAmount, totalWeight, customerCategory, customerId,
+        customerName, cartItems: cartItemsArr, completedAt, createdAt, timestamp,
+      });
+    }
+
+    return billId;
+  },
+
+  updateBillStatus: (billId, status) => {
+    const completedAt = status === 'Completed' ? new Date().toISOString() : null;
+    // publishedAt is cleared so the change is picked up by the next publish pass
+    // and reaches the other Command Centers.
+    db.prepare('UPDATE bills SET status = ?, completedAt = ?, publishedAt = NULL WHERE billId = ?')
+      .run(status, completedAt, billId);
+
+    if (status === 'Completed') {
+      const bill = db.prepare('SELECT * FROM bills WHERE billId = ?').get(billId);
+      if (bill) recordRevenue({ ...bill, cartItems: safeJsonParse(bill.cartItems, []) });
+    }
+  },
+
+  findBillById: (billId) => {
+    const row = db.prepare('SELECT * FROM bills WHERE billId = ?').get(billId);
+    if (!row) return undefined;
+    return { ...row, cartItems: safeJsonParse(row.cartItems, []) };
+  },
+
+  findBillsByPhone: (phone) => {
+    const rows = db.prepare('SELECT * FROM bills WHERE phone = ? ORDER BY timestamp DESC').all(phone);
+    return rows.map((row) => ({ ...row, cartItems: safeJsonParse(row.cartItems, []) }));
+  },
+
+  /** Removes the order. The revenue ledger is deliberately left untouched. */
+  deleteBill: (billId) => {
+    db.prepare('DELETE FROM bills WHERE billId = ?').run(billId);
+  },
+
+  // ── Shared archive plumbing ─────────────────────────────────────────────
+  //
+  // Bills and ledger entries live in Firestore as durable shared records, so a
+  // second Command Center sees the same archive. `publishedAt` marks a row as
+  // already sent; rows that predate this (or were only ever consumed from the
+  // phone mailbox) come up as unpublished and get backfilled on startup.
+
+  getUnpublishedBills: (limit = 200) => {
+    const rows = db.prepare('SELECT * FROM bills WHERE publishedAt IS NULL LIMIT ?').all(limit);
+    return rows.map((r) => ({ ...r, cartItems: safeJsonParse(r.cartItems, []) }));
+  },
+
+  getUnpublishedLedger: (limit = 200) =>
+    db.prepare('SELECT * FROM revenue_ledger WHERE publishedAt IS NULL LIMIT ?').all(limit),
+
+  markBillPublished: (billId) => {
+    db.prepare('UPDATE bills SET publishedAt = ? WHERE billId = ?').run(Date.now(), billId);
+  },
+
+  markLedgerPublished: (billId) => {
+    db.prepare('UPDATE revenue_ledger SET publishedAt = ? WHERE billId = ?').run(Date.now(), billId);
+  },
+
+  countUnpublished: () => ({
+    bills: db.prepare('SELECT COUNT(*) n FROM bills WHERE publishedAt IS NULL').get().n,
+    ledger: db.prepare('SELECT COUNT(*) n FROM revenue_ledger WHERE publishedAt IS NULL').get().n,
+  }),
+
+  /** Apply a ledger entry arriving from another Command Center. */
+  mirrorLedgerEntry: (entry) => {
+    db.prepare(`
+      INSERT INTO revenue_ledger (billId, amount, weight, customerCategory, customerId, customerName, services, collectedAt, publishedAt)
+      VALUES (@billId, @amount, @weight, @customerCategory, @customerId, @customerName, @services, @collectedAt, @publishedAt)
+      ON CONFLICT(billId) DO UPDATE SET
+        amount = excluded.amount,
+        weight = excluded.weight,
+        customerCategory = excluded.customerCategory,
+        customerId = excluded.customerId,
+        customerName = excluded.customerName,
+        services = excluded.services,
+        collectedAt = excluded.collectedAt,
+        publishedAt = excluded.publishedAt
+    `).run({
+      billId: entry.billId,
+      amount: entry.amount || 0,
+      weight: entry.weight || 0,
+      customerCategory: entry.customerCategory || 'Student',
+      customerId: entry.customerId || null,
+      customerName: entry.customerName || null,
+      services: typeof entry.services === 'string' ? entry.services : JSON.stringify(entry.services || []),
+      collectedAt: entry.collectedAt || Date.now(),
+      publishedAt: Date.now(),
+    });
+  },
+
+  // ── Customers (mirror of the shared directory) ──────────────────────────
+
+  getCustomers: () => db.prepare('SELECT * FROM customers ORDER BY name COLLATE NOCASE').all(),
+
+  upsertCustomer: (c) => {
+    db.prepare(`
+      INSERT INTO customers (id, name, mobile, category, totalWeight, totalAmountPaid, createdAt, updatedAt)
+      VALUES (@id, @name, @mobile, @category, @totalWeight, @totalAmountPaid, @createdAt, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        mobile = excluded.mobile,
+        category = excluded.category,
+        totalWeight = excluded.totalWeight,
+        totalAmountPaid = excluded.totalAmountPaid,
+        updatedAt = excluded.updatedAt
+    `).run({
+      id: c.id,
+      name: c.name || 'Unknown',
+      mobile: c.mobile || '',
+      category: c.category || 'Student',
+      totalWeight: c.totalWeight || 0,
+      totalAmountPaid: c.totalAmountPaid || 0,
+      createdAt: c.createdAt || Date.now(),
+      updatedAt: c.updatedAt || Date.now(),
+    });
+  },
+
+  deleteCustomer: (id) => {
+    db.prepare('DELETE FROM customers WHERE id = ?').run(id);
+  },
+
+  /** Accumulate lifetime stats, mirroring CustomerService.updateStats on mobile. */
+  addCustomerStats: (id, addedWeight, addedAmount) => {
+    db.prepare(`
+      UPDATE customers
+      SET totalWeight = COALESCE(totalWeight, 0) + ?,
+          totalAmountPaid = COALESCE(totalAmountPaid, 0) + ?,
+          updatedAt = ?
+      WHERE id = ?
+    `).run(addedWeight || 0, addedAmount || 0, Date.now(), id);
+    return db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+  },
+
+  // ── Shared config cache ─────────────────────────────────────────────────
+
+  getConfig: (key) => {
+    const row = db.prepare('SELECT value FROM app_config WHERE key = ?').get(key);
+    return row ? safeJsonParse(row.value, null) : null;
+  },
+
+  setConfig: (key, value) => {
+    db.prepare(`
+      INSERT INTO app_config (key, value, updatedAt) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updatedAt = excluded.updatedAt
+    `).run(key, JSON.stringify(value), Date.now());
+  },
+
+  // ── Expenses ────────────────────────────────────────────────────────────
+
+  expenseCategories: () => EXPENSE_CATEGORIES.slice(),
+
+  getExpenses: (limit = 500) =>
+    db.prepare('SELECT * FROM expenses ORDER BY spentAt DESC LIMIT ?').all(limit),
+
+  upsertExpense: (e) => {
+    db.prepare(`
+      INSERT INTO expenses (id, title, category, amount, note, spentAt, createdAt, updatedAt, recordedBy)
+      VALUES (@id, @title, @category, @amount, @note, @spentAt, @createdAt, @updatedAt, @recordedBy)
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        category = excluded.category,
+        amount = excluded.amount,
+        note = excluded.note,
+        spentAt = excluded.spentAt,
+        updatedAt = excluded.updatedAt,
+        recordedBy = excluded.recordedBy
+    `).run({
+      id: e.id,
+      title: e.title || 'Expense',
+      category: e.category || 'Other',
+      amount: Number(e.amount) || 0,
+      note: e.note || null,
+      spentAt: e.spentAt || Date.now(),
+      createdAt: e.createdAt || Date.now(),
+      updatedAt: e.updatedAt || Date.now(),
+      recordedBy: e.recordedBy || null,
+    });
+    return db.prepare('SELECT * FROM expenses WHERE id = ?').get(e.id);
+  },
+
+  deleteExpense: (id) => {
+    db.prepare('DELETE FROM expenses WHERE id = ?').run(id);
+  },
+
+  // ── Finance (revenue from the ledger, minus expenses) ───────────────────
+
+  /**
+   * Profit and loss over the same bucketing the revenue tab uses, so the two
+   * tabs always agree. Revenue comes from the ledger (survives bill deletion);
+   * expenses come from the expenses table.
+   */
+  getFinanceStats: ({ mode = 'months', count = 12 } = {}) => {
+    const entries = db.prepare('SELECT amount, collectedAt FROM revenue_ledger').all();
+    const spends = db.prepare('SELECT amount, category, spentAt FROM expenses').all();
+
+    const buckets = new Map();
+    const now = new Date();
+
+    if (mode === 'years') {
+      for (let i = count - 1; i >= 0; i--) {
+        buckets.set(String(now.getFullYear() - i), { revenue: 0, expense: 0 });
+      }
+    } else if (mode === 'days') {
+      for (let i = count - 1; i >= 0; i--) {
+        buckets.set(dayKey(new Date(now.getTime() - i * 86400000)), { revenue: 0, expense: 0 });
+      }
+    } else {
+      for (let i = count - 1; i >= 0; i--) {
+        buckets.set(monthKey(new Date(now.getFullYear(), now.getMonth() - i, 1)), { revenue: 0, expense: 0 });
+      }
+    }
+
+    const keyFor = mode === 'years' ? yearKey : mode === 'days' ? dayKey : monthKey;
+
+    let totalRevenue = 0, totalExpense = 0;
+    for (const e of entries) {
+      totalRevenue += e.amount || 0;
+      const slot = buckets.get(keyFor(new Date(e.collectedAt)));
+      if (slot) slot.revenue += e.amount || 0;
+    }
+
+    const expenseByCategory = new Map();
+    for (const s of spends) {
+      totalExpense += s.amount || 0;
+      expenseByCategory.set(s.category || 'Other', (expenseByCategory.get(s.category || 'Other') || 0) + (s.amount || 0));
+      const slot = buckets.get(keyFor(new Date(s.spentAt)));
+      if (slot) slot.expense += s.amount || 0;
+    }
+
+    const series = Array.from(buckets, ([key, v]) => ({
+      key, ...v, profit: v.revenue - v.expense,
+    }));
+
+    const windowRevenue = series.reduce((s, b) => s + b.revenue, 0);
+    const windowExpense = series.reduce((s, b) => s + b.expense, 0);
+
+    return {
+      mode,
+      series,
+      windowRevenue,
+      windowExpense,
+      windowProfit: windowRevenue - windowExpense,
+      totalRevenue,
+      totalExpense,
+      totalProfit: totalRevenue - totalExpense,
+      // Margin over the visible window; null rather than 0 when nothing was
+      // earned, so the UI can show "—" instead of a misleading 0%.
+      margin: windowRevenue > 0 ? (windowRevenue - windowExpense) / windowRevenue : null,
+      expenseByCategory: Array.from(expenseByCategory, ([name, amount]) => ({ name, amount }))
+        .sort((a, b) => b.amount - a.amount),
+      expenseCount: spends.length,
+    };
+  },
+
+  // ── Revenue reporting (always from the ledger) ──────────────────────────
+
+  /**
+   * @param {object} opts
+   *   mode  — 'days' | 'months' | 'years'
+   *   count — how many buckets back from now (days: 30, months: 12, years: 5)
+   *
+   * Revenue figures come from revenue_ledger so deleting a bill never reduces
+   * them. Pending figures come from the bills table, because an unpaid bill is
+   * a live order rather than history.
+   */
+  getRevenueStats: ({ mode = 'days', count = 30 } = {}) => {
+    const entries = db.prepare('SELECT * FROM revenue_ledger').all();
+    const bills = db.prepare('SELECT status, totalAmount FROM bills').all();
+
+    const buckets = new Map();
+    const now = new Date();
+
+    if (mode === 'months') {
+      for (let i = count - 1; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        buckets.set(monthKey(d), { revenue: 0, bills: 0 });
+      }
+    } else if (mode === 'years') {
+      for (let i = count - 1; i >= 0; i--) {
+        buckets.set(String(now.getFullYear() - i), { revenue: 0, bills: 0 });
+      }
+    } else {
+      for (let i = count - 1; i >= 0; i--) {
+        const d = new Date(now.getTime() - i * 86400000);
+        buckets.set(dayKey(d), { revenue: 0, bills: 0 });
+      }
+    }
+
+    const keyFor = mode === 'months' ? monthKey : mode === 'years' ? yearKey : dayKey;
+
+    let totalRevenue = 0;
+    const byCategory = new Map();
+    const byService = new Map();
+
+    for (const entry of entries) {
+      totalRevenue += entry.amount || 0;
+
+      const cat = entry.customerCategory || 'Student';
+      byCategory.set(cat, (byCategory.get(cat) || 0) + (entry.amount || 0));
+
+      for (const svc of safeJsonParse(entry.services, [])) {
+        const name = svc.serviceType || 'OTHER';
+        byService.set(name, (byService.get(name) || 0) + (svc.subtotal || 0));
+      }
+
+      const slot = buckets.get(keyFor(new Date(entry.collectedAt)));
+      if (slot) { slot.revenue += entry.amount || 0; slot.bills += 1; }
+    }
+
+    let pendingCount = 0, pendingValue = 0;
+    for (const b of bills) {
+      if ((b.status || 'Pending') !== 'Completed') {
+        pendingCount++;
+        pendingValue += b.totalAmount || 0;
+      }
+    }
+
+    const series = Array.from(buckets, ([key, v]) => ({ key, ...v }));
+
+    return {
+      mode,
+      series,
+      // Sum over the visible window, so the tile matches the chart.
+      windowRevenue: series.reduce((s, b) => s + b.revenue, 0),
+      windowBills: series.reduce((s, b) => s + b.bills, 0),
+      totalRevenue,
+      collectedCount: entries.length,
+      pendingCount,
+      pendingValue,
+      totalBills: bills.length,
+      byCategory: Array.from(byCategory, ([name, revenue]) => ({ name, revenue }))
+        .sort((a, b) => b.revenue - a.revenue),
+      byService: Array.from(byService, ([name, revenue]) => ({ name, revenue }))
+        .sort((a, b) => b.revenue - a.revenue),
+    };
+  },
+};
