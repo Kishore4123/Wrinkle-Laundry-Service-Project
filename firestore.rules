@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- Transient mailbox (deleted once consumed) ----------------------
+
+    // Global bill number counter. Every bill-generating device allocates from this
+    // inside a transaction, so numbers are unique across all mobiles and the desktop.
+    match /counters/{counter} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Mobile -> desktop. Desktop ingests into SQLite then deletes the doc.
+    match /bills_inbox/{billId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Mobile -> desktop lookup request. Desktop answers then deletes the doc.
+    match /search_requests/{requestId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Desktop -> one specific mobile. Partitioned per device so that with several
+    // phones, one phone cannot consume another phone's messages.
+    match /device_inbox/{deviceId}/messages/{messageId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ---- Durable shared state (lives here, never auto-deleted) -----------
+
+    // Pricing configuration: customer categories, per-kg rates, per-item rates.
+    // Small, edited rarely, read by every device. Write access is gated in the UI
+    // by the device registry below, not by these rules — see CLAUDE.md.
+    match /config/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Customer directory, mirrored into every device's local store.
+    match /customers/{customerId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Device registry. The desktop uses this to see which phones exist and to
+    // grant or revoke their ability to edit pricing.
+    match /devices/{deviceId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Shop expenses, shared so every Command Center sees one set of books.
+    match /expenses/{expenseId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // The shared bill archive. Durable rather than a mailbox: with more than
+    // one Command Center, a consume-and-delete inbox would race between them
+    // and only the first to look would keep the bill.
+    match /bills/{billId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Shared revenue ledger. Deleting a bill never touches this.
+    match /ledger/{billId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Superseded by /bills; kept readable so an older build can still drain it.
+    match /desk_bills/{billId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
