@@ -68,29 +68,48 @@ function isValidMobile(mobile) {
     return /^\d{10}$/.test(String(mobile || '').trim());
 }
 
+/** Split an item name into lines no wider than `width`, breaking on spaces. */
+function wrapName(name, width) {
+    const lines = [];
+    let line = '';
+    String(name).split(/\s+/).filter(Boolean).forEach((word) => {
+        while (word.length > width) {
+            if (line) { lines.push(line); line = ''; }
+            lines.push(word.slice(0, width));
+            word = word.slice(width);
+        }
+        if (!line) line = word;
+        else if ((line + ' ' + word).length <= width) line += ' ' + word;
+        else { lines.push(line); line = word; }
+    });
+    if (line) lines.push(line);
+    return lines.length ? lines : [''];
+}
+
 /**
- * Monospace item table, two lines per item. Column widths and padding match the
- * mobile implementation so the receipt lines up identically in WhatsApp.
+ * Monospace item table: Item - Name | Qty | Total, one row per item, long names
+ * wrapping inside the name column. Column widths and padding match the mobile
+ * implementation so the receipt lines up identically in WhatsApp.
  */
 function buildItemTable(items, isPiecewise) {
-    const COL_PRICE = 13;
-    const COL_QTY = 9;
+    const COL_NAME = 16;
+    const COL_QTY = 7;
+    const COL_TOTAL = 7;
 
-    const divider = '-'.repeat(30);
-    const header = 'Item - Name';
-    const subHeader = 'Price'.padEnd(COL_PRICE) + 'Qty'.padEnd(COL_QTY) + 'Total';
+    const divider = '-'.repeat(COL_NAME + COL_QTY + COL_TOTAL);
+    const header = 'Item - Name'.padEnd(COL_NAME) + 'Qty'.padEnd(COL_QTY) + 'Total'.padStart(COL_TOTAL);
 
     let rows = '';
     items.forEach((i, idx) => {
-        const name = i.label || i.category || '';
-        const price = isPiecewise ? ('₹' + i.rate).padEnd(COL_PRICE) : '-'.padEnd(COL_PRICE);
+        const nameLines = wrapName(i.label || i.category || '', COL_NAME - 1);
         const qty = ('x ' + i.count).padEnd(COL_QTY);
         const total = isPiecewise ? '₹' + (i.count * i.rate) : '-';
         const spacer = idx > 0 ? '\n' : '';
-        rows += `${spacer}\n${name}\n${price}${qty}${total.padStart(7)}`;
+        rows += `${spacer}\n${nameLines[0].padEnd(COL_NAME)}${qty}${total.padStart(COL_TOTAL)}`;
+        nameLines.slice(1).forEach((l) => { rows += `\n${l}`; });
     });
 
-    return '```text\n' + divider + '\n' + header + '\n' + divider + '\n' + subHeader + '\n' + divider + rows + '\n```';
+    return '```\n' + divider + '\n' + header + '\n' + divider + rows + '\n```';
 }
 
 function buildBillMessage(bill) {
@@ -119,7 +138,6 @@ function buildBillMessage(bill) {
                     itemsSection += '\n' + buildItemTable(cartItem.items, false);
                 }
             }
-            itemsSection += `\n   📋 Subtotal: ₹${cartItem.subtotal}`;
             itemsSection += '\n';
         });
     } else {
@@ -137,7 +155,7 @@ function buildBillMessage(bill) {
     const createdAt = bill.createdAt || (bill.timestamp ? Date.parse(bill.timestamp) : Date.now());
 
     return `${centeredBillId}
-
+ 
 Wrinkle Release Laundry Service
 Near Covai Residency,
 Madhvarayapuram,
@@ -149,7 +167,7 @@ Coimbatore.
 📅 Date: ${formatDate(createdAt)}${dueDateSection}
 ━━━━━━━━━━━━━━━━━━━━${itemsSection}
 ━━━━━━━━━━━━━━━━━━━━
-💵 Total Amount: ₹${bill.totalAmount}
+*TOTAL : ₹${bill.totalAmount}*
 ━━━━━━━━━━━━━━━━━━━━
 Thank you for using Wrinkle Release Laundry Service! 🙏
 

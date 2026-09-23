@@ -67,36 +67,56 @@ export function buildWhatsAppUrl(mobile, message) {
 }
 
 /**
+ * Split an item name into lines no wider than `width`, breaking on spaces
+ * (and hard-splitting any single word that is longer than a line).
+ */
+function wrapName(name, width) {
+  const lines = [];
+  let line = '';
+  String(name).split(/\s+/).filter(Boolean).forEach((word) => {
+    while (word.length > width) {
+      if (line) { lines.push(line); line = ''; }
+      lines.push(word.slice(0, width));
+      word = word.slice(width);
+    }
+    if (!line) line = word;
+    else if ((line + ' ' + word).length <= width) line += ' ' + word;
+    else { lines.push(line); line = word; }
+  });
+  if (line) lines.push(line);
+  return lines.length ? lines : [''];
+}
+
+/**
  * Build a mobile-friendly monospace item table for WhatsApp.
- * Two-line layout per item: name on line 1, price/qty/total on line 2.
+ * Columns: Item - Name | Qty | Total, one row per item. Long names wrap onto
+ * extra lines inside the name column; qty and total sit on the first line.
  * Wrapped in triple backticks for monospace rendering.
  * Uses padEnd/padStart for strict column alignment.
  * @param {Array} items - Array of {label/category, rate, count}
- * @param {boolean} isPiecewise - Whether to show price/total or dashes
+ * @param {boolean} isPiecewise - Whether to show the line total or a dash
  */
 function buildItemTable(items, isPiecewise) {
-  const COL_PRICE = 13;
-  const COL_QTY = 9;
+  const COL_NAME = 16;
+  const COL_QTY = 7;
+  const COL_TOTAL = 7;
 
-  const divider = '-'.repeat(30);
-  const header = 'Item - Name';
-  const subHeader = 'Price'.padEnd(COL_PRICE) + 'Qty'.padEnd(COL_QTY) + 'Total';
+  const divider = '-'.repeat(COL_NAME + COL_QTY + COL_TOTAL);
+  const header = 'Item - Name'.padEnd(COL_NAME) + 'Qty'.padEnd(COL_QTY) + 'Total'.padStart(COL_TOTAL);
 
   let rows = '';
   items.forEach((i, idx) => {
-    const name = i.label || i.category || '';
-    const price = isPiecewise ? ('\u20b9' + i.rate).padEnd(COL_PRICE) : '-'.padEnd(COL_PRICE);
+    const nameLines = wrapName(i.label || i.category || '', COL_NAME - 1);
     const qty = ('x ' + i.count).padEnd(COL_QTY);
     const total = isPiecewise ? '\u20b9' + (i.count * i.rate) : '-';
     const spacer = idx > 0 ? '\n' : '';
-    rows += `${spacer}\n${name}\n${price}${qty}${total.padStart(7)}`;
+    rows += `${spacer}\n${nameLines[0].padEnd(COL_NAME)}${qty}${total.padStart(COL_TOTAL)}`;
+    nameLines.slice(1).forEach((l) => { rows += `\n${l}`; });
   });
 
-  return '```text\n' +
+  return '```\n' +
     divider + '\n' +
     header + '\n' +
-    divider + '\n' +
-    subHeader + '\n' +
     divider +
     rows + '\n```';
 }
@@ -134,7 +154,6 @@ export function buildBillMessage(bill) {
           itemsSection += '\n' + buildItemTable(cartItem.items, false);
         }
       }
-      itemsSection += `\n   📋 Subtotal: ₹${cartItem.subtotal}`;
       itemsSection += '\n';
     });
   } else {
@@ -164,7 +183,7 @@ Coimbatore.
 📅 Date: ${formatDate(bill.createdAt)}${dueDateSection}
 ━━━━━━━━━━━━━━━━━━━━${itemsSection}
 ━━━━━━━━━━━━━━━━━━━━
-💵 Total Amount: ₹${bill.totalAmount}
+*TOTAL : ₹${bill.totalAmount}*
 ━━━━━━━━━━━━━━━━━━━━
 Thank you for using Wrinkle Release Laundry Service! 🙏
 
