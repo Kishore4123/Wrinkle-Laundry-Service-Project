@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout
 
-This directory (`main/`) is itself a git repo, pushed to **https://github.com/sandeepmk2006/laundry_mobile_app_and_desktop_app.git** (`origin`, branch `main`). It contains two independent, unrelated-by-tooling but functionally paired projects for "Wrinkle Release Laundry Service":
+This directory (`main/`) is itself a git repo, pushed to **https://github.com/Kishore4123/Wrinkle-Laundry-Service-Project.git** (`origin`, branch `main`). It is the only remote. It contains two independent, unrelated-by-tooling but functionally paired projects for "Wrinkle Release Laundry Service":
 
 - **`laundry app/`** — Expo/React Native mobile app used by staff to create bills and manage customers.
 - **`laundry desktop/`** — Electron + better-sqlite3 desktop app ("Wrinkle Laundry Command Center") that acts as the durable bill store and printing/QR station.
 
-Both were originally separate git repos and were merged in via `git subtree add`, which preserves each one's full commit history under its folder rather than squashing it. `laundry app` still also carries its own older remote pointing at `https://github.com/sandeepmk2006/laundry_app.git` — a leftover from before the merge; work only reaches the combined repo above if pushed from `main`'s `origin`. `laundry desktop` has no other remote; this repo is its only copy on GitHub.
+Both were originally separate git repos and were merged in via `git subtree add`, which preserves each one's full commit history under its folder rather than squashing it. `laundry app/` still contains a leftover nested `.git` from before the merge, but it has no remote — work only reaches GitHub by pushing from `main`'s `origin`. This repo is the only copy of either app on GitHub.
 
 The two apps exchange data through Cloud Firestore (see "Sync architecture" below) — bills, revenue and other shared records are durable there, not a pure mailbox, because more than one Command Center needs to see the same data.
 
@@ -168,12 +168,11 @@ The first version of this app had `items TEXT NOT NULL` on `bills`. A machine st
 - **OneDrive fixed.** Was silently broken — a live SQLite file inside a OneDrive folder never syncs, because OneDrive skips files the app holds open. Replaced with local-database + periodic snapshot-to-OneDrive, plus a one-click repair for anyone who'd already moved their live database into OneDrive.
 - **Legacy schema crash fixed.** A machine still running the very first schema version (`items TEXT NOT NULL`) failed every bill creation; `migrateLegacyBills()` now rebuilds the table on startup.
 - **Several real bugs found by testing against live data**, not just reading the code: an Electron `window.prompt()` call that silently no-ops (broke item/device rename), a stale `isConnected` reference that crashed the mobile History tab on open, a `cartItems` array-vs-JSON-string mismatch that broke cross-desktop mirroring, and a check-then-insert race in bill ingestion that could hit a UNIQUE constraint under concurrent Firestore snapshots.
-- **Repo consolidated.** `main/` is now itself a git repo pushed to `github.com/sandeepmk2006/laundry_mobile_app_and_desktop_app`, with both previously-separate app repos merged in via `git subtree` (full history preserved under each folder, not squashed).
+- **Repo consolidated.** `main/` is now itself a git repo pushed to `github.com/Kishore4123/Wrinkle-Laundry-Service-Project`, with both previously-separate app repos merged in via `git subtree` (full history preserved under each folder, not squashed).
 
 ### Known gaps / open items
 
 - **Device permission enforcement is UI-only**, not backed by Firestore rules (see "Device control is UI-gated, not rules-enforced" above). Fine for "which employee's phone can edit prices"; not a real security boundary.
 - **No automated tests anywhere** — everything above was verified by hand against a live Firebase project and a live SQLite database (see `scripts/verify/*.js` for the throwaway scripts used, e.g. `check-ledger-delete.js`, `check-legacy-migration.js`, `probe-renderer.js`). If test coverage is ever wanted, this is greenfield.
 - **Single Firebase project for all customers.** `stress-monitor-7005a` is shared by every install. Fine for one shop; if this is ever sold to multiple laundry businesses, each needs its own Firebase project — sharing one means one customer's usage/quota affects another's, and there's no data isolation between shops. Flagged during the pricing conversation but not yet acted on.
-- **`laundry app`'s old standalone remote** (`laundry_app.git`) still exists and still works if pushed to directly — easy to accidentally fork the two histories again by pushing to the wrong remote. Worth deciding whether to keep it or remove it.
 - **Garment-level detail is opt-in at bill-creation time** and most historical bills don't have it (see "Bill detail view" above) — not a bug, just a reminder that the new detail view will look sparse on old data.
