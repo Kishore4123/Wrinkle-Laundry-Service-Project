@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout
 
-This directory contains two independent, unrelated-by-tooling but functionally paired projects for "Wrinkle Release Laundry Service":
+This directory (`main/`) is itself a git repo, pushed to **https://github.com/sandeepmk2006/laundry_mobile_app_and_desktop_app.git** (`origin`, branch `main`). It contains two independent, unrelated-by-tooling but functionally paired projects for "Wrinkle Release Laundry Service":
 
-- **`laundry app/`** — Expo/React Native mobile app used by staff to create bills and manage customers. Has its own git repository (`laundry app/.git`); the top-level `main/` folder is NOT a git repo.
-- **`laundry desktop/`** — Electron + better-sqlite3 desktop app ("Wrinkle Laundry Command Center") that acts as the durable bill store and printing/QR station. No git repo currently.
+- **`laundry app/`** — Expo/React Native mobile app used by staff to create bills and manage customers.
+- **`laundry desktop/`** — Electron + better-sqlite3 desktop app ("Wrinkle Laundry Command Center") that acts as the durable bill store and printing/QR station.
 
-The two apps exchange data through Cloud Firestore used as a transient mailbox (see "Sync architecture" below). The desktop's SQLite database is the only durable store — Firestore holds nothing once a message is consumed.
+Both were originally separate git repos and were merged in via `git subtree add`, which preserves each one's full commit history under its folder rather than squashing it. `laundry app` still also carries its own older remote pointing at `https://github.com/sandeepmk2006/laundry_app.git` — a leftover from before the merge; work only reaches the combined repo above if pushed from `main`'s `origin`. `laundry desktop` has no other remote; this repo is its only copy on GitHub.
+
+The two apps exchange data through Cloud Firestore (see "Sync architecture" below) — bills, revenue and other shared records are durable there, not a pure mailbox, because more than one Command Center needs to see the same data.
 
 ## Commands
 
@@ -128,20 +130,50 @@ Plain scripts loaded in order, each attaching one global — no bundler, no modu
 
 ### Multiple Command Centers
 
-- Each desktop registers under a **stable per-machine id** (`machine-id.json` in `userData`), not the literal `"desktop"` — otherwise two would overwrite each other's registry entry.
-- Desktop-raised bills publish to **`desk_bills`**, a durable collection, rather than `bills_inbox`. The inbox is consume-and-delete, so with two desktops whichever saw a document first would delete it before the other did. Each desktop skips its own writes via `recordedByDesk`.
-- **The bill archive is shared, not per-machine.** When a desktop drains a bill from `bills_inbox` it republishes it to `bills` *before* deleting the mailbox doc — otherwise the bill would exist only on whichever Command Center happened to look first. Desktop-raised bills publish there too.
-- **`publishedAt` drives a backfill.** A row with `publishedAt IS NULL` has never reached the shared archive; `shared.publishPending()` runs on startup and after status changes to push those up. This is what carries an existing machine's whole history — phone bills consumed before the archive existed, and every revenue entry — to a newly installed Command Center. Mirroring *from* the cloud sets `publishedAt` so it cannot echo back.
-- `cartItems` is an array locally but a JSON **string** in the shared archive. `addBill` normalises it; `recordRevenue` maps over it and will throw on a raw string.
+- Each desktop registers under a **stable per-machine id** (`machine-id.json` in `userData`, format `desk-XXXXXXXX`), not the literal `"desktop"` — otherwise two would overwrite each other's registry entry. `shared.setDeskId()` records it so a desktop can tell its own writes apart from another one's.
+- **The bill archive is shared, not per-machine**, living in `bills/{billId}` and `ledger/{billId}` (see the sync table above) — not `desk_bills`, which was an earlier, superseded design. When a desktop drains a bill from `bills_inbox` it republishes it to `bills` *before* deleting the mailbox doc — otherwise the bill would exist only on whichever Command Center happened to look first. Desktop-raised bills (`db:addBill`) publish there directly.
+- **`publishedAt` drives a backfill.** A row with `publishedAt IS NULL` has never reached the shared archive; `shared.publishPending()` runs on startup and after every status change to push those up, in batches of 100, stopping on the first failure rather than spinning. This is what carries an existing machine's whole history — phone bills consumed before the archive existed, and every revenue entry — to a newly installed Command Center. Mirroring *from* the cloud (`fromCloud: true` in `db.addBill`) sets `publishedAt` immediately so it cannot echo back and re-trigger a publish.
+- `cartItems` is an array locally but a JSON **string** in the shared archive. `db.addBill` normalises it on the way in (`Array.isArray(...) ? ... : safeJsonParse(...)`) — `recordRevenue` maps over the parsed array and will throw `.map is not a function` on a raw string. This broke mirroring once; watch for it if the shape changes again.
+- Deleting a bill (`db:deleteBill` → `shared.removeBillEverywhere`) removes it from local SQLite and from `bills/{billId}` in the cloud, so it disappears from every desktop. It never touches `ledger/{billId}`.
 
 ### OneDrive is a backup, never the live database
 
 **A live SQLite file inside OneDrive does not sync.** The app holds the handle open for as long as it runs, and OneDrive skips open files — so the data only appears on other machines after the app is closed, moved out and back. Learned the hard way.
 
-So the live database stays in `userData`, and the app writes a **consistent snapshot** (SQLite's online backup API, safe mid-write) to `OneDrive/WrinkleLaundry Backup/` every 10 minutes, 30 seconds after launch, and on quit. Settings detects a database sitting inside a cloud folder and offers a one-click repair that moves it local and turns backups on.
+So the live database stays in `userData`, and the app writes a **consistent snapshot** (`db.backupTo()`, SQLite's online backup API, safe mid-write) to `OneDrive/WrinkleLaundry Backup/wrinkle-laundry-backup.db` every 10 minutes, 30 seconds after launch, and on quit (`storage:backupNow`, `storage:backupInfo`, `storage:useLocalPlusBackup` in `main.js`). Settings shows a warning banner when the live database is detected sitting inside a cloud-synced folder and offers a one-click repair (`fixCloudStorage()` in `settings.js`) that moves it back to `userData` and starts backups.
 
-Cross-machine *sharing* is Firestore's job, not OneDrive's — OneDrive is disaster recovery.
+Cross-machine *sharing* is Firestore's job, not OneDrive's — OneDrive is disaster recovery only.
+
+### Bill detail view
+
+Both platforms can show a bill's full breakdown — every service line with its weight/rate or piece basis, and the per-garment counts within it (`ci.items`) — not just the summary row shown in a list.
+
+- **Desktop:** clicking any row in the Bills table calls `showDetail(bill)` in `app.js`, which renders into `#detail-modal`. Row click and the action buttons (`Complete`/`WhatsApp`/`Delete`) both live on the `<tr>`; the actions cell calls `e.stopPropagation()` so clicking a button doesn't also open the detail view.
+- **Mobile:** tapping a bill in `HistoryScreen` opens `BillDetailModal` instead of jumping straight to the payment flow. From inside it, `onAction` either opens the payment/delivery flow (pending bills) or resends the WhatsApp receipt (completed bills).
+- **This only shows data that was actually entered.** The garment breakdown (`cartItem.items`) is optional in the mobile bill-creation flow — a bill created with just a weight and no per-garment tally will correctly show "No garment breakdown was recorded" rather than fabricating one. Existing bills created before this feature will show that message for every service line.
 
 ### Legacy database migration
 
 The first version of this app had `items TEXT NOT NULL` on `bills`. A machine still holding that schema fails **every** insert with `NOT NULL constraint failed: bills.items`, because nothing populates it any more. SQLite cannot drop a constraint with `ALTER TABLE`, so `migrateLegacyBills()` rebuilds the table to the canonical schema and copies the overlapping columns across. It runs after the `ADD COLUMN` pass and triggers only when a NOT NULL column without a default exists outside `CANONICAL_BILL_COLUMNS` — so add new columns to that list or the migration will try to drop them.
+
+## Project status (as of 2026-09-23)
+
+### What's done
+
+- **Full sync rebuild.** Replaced an earlier WebRTC peer-to-peer transport with Firestore. Bills, revenue, customers, pricing, expenses and the device registry all sync between phones and desktops; multiple phones and multiple Command Centers are both supported (see "Multiple Command Centers" above).
+- **Revenue integrity.** Revenue lives in an append-only ledger, separate from the `bills` table, so deleting an order never erases money already collected. Verified against a live database: deleted a completed bill, ledger total was unchanged.
+- **Desktop redesign.** Rebuilt from a single dark table view into a six-tab sidebar app (New Bill, Bills, Customers, Expenses, Revenue, Finance, Settings) matching a supplied reference design — light working area, dark navy sidebar, card-based layout. New Bill is a full point-of-sale screen, not a modal.
+- **Finance tab.** Profit/margin computed from ledger revenue minus expenses, on the same day/month/year buckets the Revenue tab uses, so the two can never disagree.
+- **Bill detail view.** Both platforms can show a bill's full per-service, per-garment breakdown (see above), not just the summary line.
+- **OneDrive fixed.** Was silently broken — a live SQLite file inside a OneDrive folder never syncs, because OneDrive skips files the app holds open. Replaced with local-database + periodic snapshot-to-OneDrive, plus a one-click repair for anyone who'd already moved their live database into OneDrive.
+- **Legacy schema crash fixed.** A machine still running the very first schema version (`items TEXT NOT NULL`) failed every bill creation; `migrateLegacyBills()` now rebuilds the table on startup.
+- **Several real bugs found by testing against live data**, not just reading the code: an Electron `window.prompt()` call that silently no-ops (broke item/device rename), a stale `isConnected` reference that crashed the mobile History tab on open, a `cartItems` array-vs-JSON-string mismatch that broke cross-desktop mirroring, and a check-then-insert race in bill ingestion that could hit a UNIQUE constraint under concurrent Firestore snapshots.
+- **Repo consolidated.** `main/` is now itself a git repo pushed to `github.com/sandeepmk2006/laundry_mobile_app_and_desktop_app`, with both previously-separate app repos merged in via `git subtree` (full history preserved under each folder, not squashed).
+
+### Known gaps / open items
+
+- **Device permission enforcement is UI-only**, not backed by Firestore rules (see "Device control is UI-gated, not rules-enforced" above). Fine for "which employee's phone can edit prices"; not a real security boundary.
+- **No automated tests anywhere** — everything above was verified by hand against a live Firebase project and a live SQLite database (see `scripts/verify/*.js` for the throwaway scripts used, e.g. `check-ledger-delete.js`, `check-legacy-migration.js`, `probe-renderer.js`). If test coverage is ever wanted, this is greenfield.
+- **Single Firebase project for all customers.** `stress-monitor-7005a` is shared by every install. Fine for one shop; if this is ever sold to multiple laundry businesses, each needs its own Firebase project — sharing one means one customer's usage/quota affects another's, and there's no data isolation between shops. Flagged during the pricing conversation but not yet acted on.
+- **`laundry app`'s old standalone remote** (`laundry_app.git`) still exists and still works if pushed to directly — easy to accidentally fork the two histories again by pushing to the wrong remote. Worth deciding whether to keep it or remove it.
+- **Garment-level detail is opt-in at bill-creation time** and most historical bills don't have it (see "Bill detail view" above) — not a bug, just a reminder that the new detail view will look sparse on old data.
